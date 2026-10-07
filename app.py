@@ -2,6 +2,7 @@
 
 
 
+
 import streamlit as st
 import pandas as pd
 import sqlite3, os, json, math, requests, html
@@ -288,6 +289,157 @@ def _collect_named_athletes(obj, found=None):
         for v in obj:
             _collect_named_athletes(v,found)
     return found
+
+
+def _flatten_numeric_stats(obj, prefix=""):
+    """Flatten nested numeric-ish stat fields into a simple dict for inspection."""
+    out={}
+    if isinstance(obj,dict):
+        for k,v in obj.items():
+            key=f"{prefix}.{k}" if prefix else str(k)
+            if isinstance(v,(int,float)):
+                out[key]=v
+            elif isinstance(v,str):
+                vv=v.strip().replace(",","")
+                try:
+                    if vv and re.fullmatch(r"-?\d+(?:\.\d+)?",vv):
+                        out[key]=float(vv)
+                except Exception:
+                    pass
+            elif isinstance(v,(dict,list)):
+                out.update(_flatten_numeric_stats(v,key))
+    elif isinstance(obj,list):
+        for i,v in enumerate(obj):
+            out.update(_flatten_numeric_stats(v,f"{prefix}[{i}]"))
+    return out
+
+def _extract_receiving_line(player_obj):
+    """Best-effort extraction of receiving stats from an ESPN player/stat object.
+    Returns only values that are explicitly present in the source object."""
+    text_blob=json.dumps(player_obj,default=str).lower()
+    nums=_flatten_numeric_stats(player_obj)
+    result={}
+    # Direct named-stat objects sometimes exist.
+    for k,v in nums.items():
+        lk=k.lower()
+        if "receiving" in lk and ("yard" in lk or "recyd" in lk):
+            result.setdefault("receiving_yards",v)
+        if "target" in lk:
+            result.setdefault("targets",v)
+        if "reception" in lk or (lk.endswith(".rec") and "receiv" in lk):
+            result.setdefault("receptions",v)
+    # ESPN summary often exposes stat groups as labels + stats arrays.
+    def walk(o):
+        if isinstance(o,dict):
+            labels=o.get("labels")
+            stats=o.get("stats")
+            if isinstance(labels,list) and isinstance(stats,list) and len(labels)==len(stats):
+                low=[str(x).lower() for x in labels]
+                for i,label in enumerate(low):
+                    raw=stats[i]
+                    try:
+                        val=float(str(raw).replace(",",""))
+                    except Exception:
+                        continue
+                    if label in ("rec","receptions"):
+                        result.setdefault("receptions",val)
+                    elif label in ("tgts","tgt","targets"):
+                        result.setdefault("targets",val)
+                    elif label in ("yds","yards") and "receiv" in text_blob:
+                        result.setdefault("receiving_yards",val)
+            for v in o.values():
+                walk(v)
+        elif isinstance(o,list):
+            for v in o:
+                walk(v)
+    walk(player_obj)
+    return result
+
+def build_player_history_packet(sport, player_name, lookback_days=45, max_games=10, league_code=None):
+    """Fetch recent events and extract only explicit player stats from ESPN summaries."""
+    player_name=(player_name or "").strip()
+    if not player_name:
+        return {"player":player_name,"games":[],"summary":{},"source":"ESPN public summaries"}
+    games=[]
+    for offset in range(int(lookback_days)):
+        if len(games)>=max_games:
+            break
+        d=date.today()-pd.Timedelta(days=offset)
+        try:
+            events=fetch_espn_scoreboard(sport,d,league_code)
+        except Exception:
+            continue
+        for ev in events:
+            if len(games)>=max_games:
+                break
+            try:
+                summary=fetch_espn_summary(sport,ev.get("id"),league_code)
+            except Exception:
+                continue
+            matches=[]
+            for item in _collect_named_athletes(summary):
+                nm=str(item.get("name") or "").strip()
+                if nm and player_name.lower() in nm.lower():
+                    stats=_extract_receiving_line(item.get("data"))
+                    if stats:
+                        matches.append((nm,stats,item.get("data")))
+            if matches:
+                nm,stats,raw=matches[0]
+                games.append({
+                    "date":ev.get("date"),
+                    "event":ev.get("name"),
+                    "player":nm,
+                    **stats
+                })
+    df=pd.DataFrame(games)
+    summary={}
+    if not df.empty:
+        if "receiving_yards" in df:
+            vals=pd.to_numeric(df["receiving_yards"],errors="coerce").dropna()
+            if not vals.empty:
+                summary["games_with_receiving_yards"]=int(vals.size)
+                summary["avg_receiving_yards"]=float(vals.mean())
+                summary["median_receiving_yards"]=float(vals.median())
+        if "targets" in df:
+            vals=pd.to_numeric(df["targets"],errors="coerce").dropna()
+            if not vals.empty:
+                summary["games_with_targets"]=int(vals.size)
+                summary["avg_targets"]=float(vals.mean())
+                summary["median_targets"]=float(vals.median())
+        if "receptions" in df:
+            vals=pd.to_numeric(df["receptions"],errors="coerce").dropna()
+            if not vals.empty:
+                summary["games_with_receptions"]=int(vals.size)
+                summary["avg_receptions"]=float(vals.mean())
+    return {
+        "player":player_name,
+        "games":games,
+        "summary":summary,
+        "source":"ESPN public event summaries",
+        "lookback_days":lookback_days
+    }
+
+def derive_market_hit_rate(packet, market_text):
+    """Calculate a simple hit rate only when the market and required stat are explicit."""
+    m=(market_text or "").lower()
+    nums=re.findall(r"\d+(?:\.\d+)?",m)
+    if not nums:
+        return None
+    line=float(nums[-1])
+    games=packet.get("games") or []
+    if "receiving" in m and "yard" in m:
+        vals=[g.get("receiving_yards") for g in games if g.get("receiving_yards") is not None]
+        vals=[float(v) for v in vals]
+        if not vals:
+            return None
+        if "over" in m:
+            hits=sum(v>line for v in vals)
+        elif "under" in m:
+            hits=sum(v<line for v in vals)
+        else:
+            return None
+        return {"line":line,"sample":len(vals),"hits":hits,"hit_rate":hits/len(vals)*100.0}
+    return None
 
 def save_espn_event_bundle(sport, event, league_code=None, include_summary=True):
     event_name=event.get("name") or f"{sport} event"
@@ -981,6 +1133,35 @@ if page=="Analyse Bet":
         x2.metric("Your probability",f"{aprob:.1f}%" if aprob else "Not supplied")
         x3.metric("Estimated edge",f"{edge:.1f} pp" if edge is not None else "Unknown")
         data_ctx=latest_context(asport, aselection or amarket, 8)
+        player_packet=None
+        player_hit=None
+        if asport in ("NFL","NBA","NHL","MLB","NCAAB","NCAAF","Soccer","Tennis") and aselection.strip():
+            try:
+                with st.spinner(f"Checking recent {asport} player data for {aselection}…"):
+                    player_packet=build_player_history_packet(asport,aselection,lookback_days=45,max_games=10)
+                    player_hit=derive_market_hit_rate(player_packet,amarket)
+                    if player_packet.get("games"):
+                        # Store the exact extracted packet so it can be reused and audited.
+                        save_event_snapshot(asport,amarket or f"{asport} analysis",aselection,player_packet,f"Auto player history · {player_packet.get('source')}")
+                        data_ctx=latest_context(asport,aselection,12)
+            except Exception:
+                player_packet=None
+                player_hit=None
+
+        if player_packet and player_packet.get("games"):
+            st.markdown("### Verified recent player data")
+            packet_df=pd.DataFrame(player_packet["games"])
+            st.dataframe(packet_df,use_container_width=True,hide_index=True)
+            sm=player_packet.get("summary") or {}
+            m1,m2,m3=st.columns(3)
+            m1.metric("Avg receiving yards",f"{sm.get('avg_receiving_yards',0):.1f}" if "avg_receiving_yards" in sm else "—")
+            m2.metric("Avg targets",f"{sm.get('avg_targets',0):.1f}" if "avg_targets" in sm else "—")
+            if player_hit:
+                m3.metric(f"Hit rate vs {player_hit['line']}",f"{player_hit['hit_rate']:.1f}% ({player_hit['hits']}/{player_hit['sample']})")
+            else:
+                m3.metric("Market hit rate","—")
+        elif asport in ("NFL","NBA","NHL","MLB","NCAAB","NCAAF","Soccer","Tennis") and aselection.strip():
+            st.caption("No exact recent player stat rows were found automatically for this selection. EdgeLab will not mark player claims as verified.")
         st.caption(f"Verification source: {source_status_for_sport(asport)}")
         if data_ctx:
             st.markdown("### Connected data context")
@@ -1016,6 +1197,7 @@ if page=="Analyse Bet":
                 # Rule Gate = price math based on user probability vs market.
                 # Evidence Verdict = whether the claimed edge is actually supported by verified evidence.
                 exact_data_text = json.dumps(data_ctx, default=str) if data_ctx else "[]"
+                player_packet_text = json.dumps(player_packet, default=str) if player_packet else "null"
                 prompt=f"""You are EdgeLab's conservative betting evidence auditor.
 
 NON-NEGOTIABLE RULES:
@@ -1047,6 +1229,9 @@ USER-SUPPLIED REASONING:
 CONNECTED DATA:
 {exact_data_text}
 
+AUTO PLAYER HISTORY PACKET:
+{player_packet_text}
+
 TASK
 Return exactly these sections:
 
@@ -1068,7 +1253,7 @@ If none, write: "No exact verified player/market data available."
 List the key claims from the user's reasoning that are not independently verified by CONNECTED DATA.
 
 5. UNKNOWN / UNVERIFIED
-List the most important missing items that should be checked before relying on the probability estimate.
+List the most important missing pre-game items that can realistically be checked before relying on the probability estimate. Do not ask for unknowable future outcomes. Prefer recent target volume, route/snap participation, current role, opponent defensive metrics, injury status, projected game environment, and market movement when available.
 
 6. WHAT WOULD CHANGE THE DECISION
 State exactly what additional verified information would strengthen or weaken the case.
@@ -1393,6 +1578,8 @@ if page=="Settings":
         st.markdown("### Decision engine")
         st.caption("BET / LEAN / NO BET currently uses a transparent rule-based gate based on your probability estimate, market implied probability and evidence quality.")
     with c2:
+        st.markdown("### Automatic player verification")
+        st.caption("For supported sports, Analyse Bet now attempts to fetch recent player-level stats automatically from ESPN public event summaries and only verifies fields explicitly returned by the source.")
         st.markdown("### Data status")
         dc=q("SELECT sport,source,MAX(captured_at) AS latest,COUNT(*) AS rows FROM event_data GROUP BY sport,source ORDER BY latest DESC")
         st.dataframe(dc,use_container_width=True,hide_index=True) if not dc.empty else st.info("No structured sports data stored yet.")
