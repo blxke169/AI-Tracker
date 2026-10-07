@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import pandas as pd
 import sqlite3, os, json, math, requests, html
@@ -208,6 +209,60 @@ def fetch_afl_games(year=None):
     return games[:120]
 
 conn().close()
+
+def _secret(name):
+    v=os.getenv(name,"")
+    if v:
+        return v
+    try:
+        return st.secrets.get(name,"")
+    except Exception:
+        return ""
+
+def ai_provider():
+    """Prefer Groq when configured, otherwise fall back to OpenAI."""
+    groq=_secret("GROQ_API_KEY")
+    if groq:
+        return "Groq",groq
+    oa=_secret("OPENAI_API_KEY")
+    if oa:
+        return "OpenAI",oa
+    return None,""
+
+def run_ai_commentary(prompt):
+    provider,key=ai_provider()
+    if not provider:
+        raise RuntimeError("NO_AI_KEY")
+    from openai import OpenAI
+    if provider=="Groq":
+        client=OpenAI(api_key=key,base_url="https://api.groq.com/openai/v1")
+        resp=client.responses.create(model="openai/gpt-oss-20b",input=prompt)
+    else:
+        client=OpenAI(api_key=key)
+        resp=client.responses.create(model="gpt-5-mini",input=prompt)
+    return provider,resp.output_text
+
+def evidence_audit(sport,evidence,data_ctx):
+    """Free deterministic evidence checks; never invents data."""
+    e=(evidence or "").lower()
+    checks={
+        "volume / opportunity":["target","targets","attempt","attempts","minutes","routes","carries","usage","volume","touches"],
+        "recent form / sample":["last 5","last 10","recent","season","average","avg","3/3","hit rate","form"],
+        "matchup / opponent":["matchup","opponent","defense","defence","coverage","pace","allowed","vs "],
+        "role / availability":["role","starter","starting","injury","injuries","questionable","probable","out","minutes"],
+        "price / market":["odds","price","line","market","closing","movement","implied"],
+    }
+    if sport in ("Horses","Greyhounds"):
+        checks.update({
+            "barrier / box / map":["barrier","box","speed map","map","draw"],
+            "track / going":["track","going","heavy","soft","good","distance","course"],
+            "class / grade":["class","grade","weight"],
+            "sectionals / speed":["sectional","split","early speed","speed figure","time"],
+        })
+    found=[name for name,keys in checks.items() if any(k in e for k in keys)]
+    missing=[name for name in checks if name not in found]
+    return found,missing,bool(data_ctx)
+
 
 def _summary():
     bets=q("SELECT * FROM bets")
@@ -716,7 +771,6 @@ if page=="Analyse Bet":
             gate="BET"; reason=f"Estimated edge is {edge:.1f} percentage points, subject to the evidence being accurate."
         execsql("""INSERT INTO analysis_log(created_at,sport,selection,market,odds,user_probability,implied_probability,edge,gate,evidence_quality,evidence,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",(datetime.now().isoformat(),asport,aselection,amarket,float(aodds),float(aprob),float(implied),float(edge) if edge is not None else None,gate,confidence,evidence,reason))
         st.markdown(f"<div class='page-kicker'>Recommendation</div><div class='page-title'>{gate}</div><div class='page-copy'>{reason}</div>",unsafe_allow_html=True)
-        st.write(reason)
         x1,x2,x3=st.columns(3)
         x1.metric("Market implied probability",f"{implied:.1f}%")
         x2.metric("Your probability",f"{aprob:.1f}%" if aprob else "Not supplied")
@@ -724,31 +778,67 @@ if page=="Analyse Bet":
         data_ctx=latest_context(asport, aselection or amarket, 8)
         if data_ctx:
             st.markdown("### Connected data context")
-            st.caption("Recent structured snapshots stored by EdgeLab. The AI may use these, but must still label missing player/market data as unknown.")
+            st.caption("Recent structured snapshots stored by EdgeLab. These are context only unless they contain the exact player/market information needed.")
             st.dataframe(pd.DataFrame(data_ctx)[["captured_at","event","subject","source"]],use_container_width=True,hide_index=True)
-        key=os.getenv("OPENAI_API_KEY","")
-        try:
-            if not key and "OPENAI_API_KEY" in st.secrets: key=st.secrets["OPENAI_API_KEY"]
-        except: pass
+
+        found,missing,has_ctx=evidence_audit(asport,evidence,data_ctx)
+        st.markdown("### Evidence check")
+        a1,a2=st.columns(2)
+        with a1:
+            st.markdown("**Covered in your reasoning**")
+            if found:
+                for item in found[:6]:
+                    st.markdown(f"✓ {item}")
+            else:
+                st.caption("No structured evidence categories detected.")
+        with a2:
+            st.markdown("**Still worth verifying**")
+            if missing:
+                for item in missing[:6]:
+                    st.markdown(f"• {item}")
+            else:
+                st.caption("Your write-up covers the main evidence categories.")
+        if not has_ctx:
+            st.caption("EdgeLab does not currently have exact connected player/market data for this selection, so it cannot independently verify those claims yet.")
+
+        provider,key=ai_provider()
         if not ai_commentary_enabled:
-            st.info("AI commentary is switched off. No OpenAI API call was made and no API credits were used. The rule-based decision and connected-data checks above are still active.")
-        elif key:
+            st.info("AI commentary is switched off. No AI API call was made. The rule-based decision and evidence checks above are still active.")
+        elif provider:
             try:
-                from openai import OpenAI
-                prompt=f"""Act as a conservative betting process analyst. Do not invent facts, statistics, injuries, odds movement, or live data.\nSPORT: {asport}\nSELECTION: {aselection}\nMARKET: {amarket}\nODDS: {aodds}\nUSER PROBABILITY: {aprob if aprob else 'not supplied'}\nEVIDENCE QUALITY: {confidence}\nSUPPLIED EVIDENCE: {evidence}\nSAFETY GATE: {gate} — {reason}\n\nExplain the decision in five short sections: Verdict, Price/Edge, Evidence For, Risks/Missing Data, What would change the decision. Never upgrade a NO BET safety gate to BET. If evidence is inadequate, explicitly say NO BET."""
-                resp=OpenAI(api_key=key).responses.create(model="gpt-5-mini",input=prompt)
-                st.markdown("### AI assessment")
-                st.write(resp.output_text)
+                prompt=f"""Act as a conservative betting process analyst. Do not invent facts, statistics, injuries, odds movement, or live data.
+SPORT: {asport}
+SELECTION: {aselection}
+MARKET: {amarket}
+ODDS: {aodds}
+MARKET IMPLIED PROBABILITY: {implied:.2f}%
+USER PROBABILITY: {aprob if aprob else 'not supplied'}%
+EVIDENCE QUALITY: {confidence}
+SUPPLIED EVIDENCE: {evidence}
+CONNECTED DATA AVAILABLE: {'yes' if data_ctx else 'no'}
+SAFETY GATE: {gate} — {reason}
+
+Critique the user's thesis rather than agreeing with it. Separate claims supported by supplied/connected evidence from assumptions. Use five short sections:
+1. Verdict
+2. Price / Edge
+3. Evidence that supports the thesis
+4. Risks / Missing Data
+5. What would change the decision
+
+Never upgrade a NO BET safety gate to BET. If exact player or market data is missing, say that clearly."""
+                used_provider,assessment=run_ai_commentary(prompt)
+                st.markdown(f"### AI assessment · {used_provider}")
+                st.write(assessment)
             except Exception as ex:
                 msg=str(ex).lower()
-                if "insufficient_quota" in msg or "credit_balance_exhausted" in msg or "no credits" in msg:
-                    st.info("AI commentary is unavailable because the API account has no credits. Rule-based analysis still worked. You can leave AI commentary switched off while testing.")
-                elif "invalid_api_key" in msg or "incorrect api key" in msg:
-                    st.info("AI commentary is unavailable because the configured API key was rejected. Rule-based analysis still worked.")
+                if "rate" in msg or "429" in msg or "quota" in msg:
+                    st.info("AI commentary hit the provider's free-tier/rate limit. The rule-based analysis and evidence checks still worked.")
+                elif "invalid_api_key" in msg or "incorrect api key" in msg or "401" in msg:
+                    st.info("The configured AI API key was rejected. The rule-based analysis and evidence checks still worked.")
                 else:
-                    st.info("AI commentary is temporarily unavailable. Rule-based analysis still worked.")
+                    st.info("AI commentary is temporarily unavailable. The rule-based analysis and evidence checks still worked.")
         else:
-            st.caption("AI commentary is enabled, but no OPENAI_API_KEY is configured. The BET/LEAN/NO BET safety gate works without it.")
+            st.caption("AI commentary is enabled, but no GROQ_API_KEY or OPENAI_API_KEY is configured. Add either key in Streamlit Secrets; the rule-based analysis still works without one.")
 
 # POST GAME
 if page=="AI Review":
@@ -770,10 +860,7 @@ if page=="AI Review":
         if st.button(review_button_label,use_container_width=True):
             cv=clv(r.odds,closing)
             execsql("UPDATE bets SET result=?,pnl=?,closing_odds=?,clv=?,post_game_reason=? WHERE id=?",(result,pnl,closing,cv,post,int(chosen)))
-            key=os.getenv("OPENAI_API_KEY","")
-            try:
-                if not key and "OPENAI_API_KEY" in st.secrets: key=st.secrets["OPENAI_API_KEY"]
-            except: pass
+            provider,key=ai_provider()
             post_ctx=latest_context(r.sport, f"{r.event} {r.selection}", 8)
             prompt=f"""You are an expert betting process analyst, not a tipster. Review this {r.sport} bet using ONLY supplied information and clearly label unknowns.
 BET: {r.sport} | {r.bet_type} | {r.market} | {r.selection} | line {r.line} | odds {r.odds} | closing {closing} | stake {r.stake}
@@ -798,10 +885,7 @@ Do not invent stats or claim to have accessed live data."""
                 st.success("Result saved. AI commentary is off, so no OpenAI API call was made and no API credits were used.")
             elif key:
                 try:
-                    from openai import OpenAI
-                    client=OpenAI(api_key=key)
-                    resp=client.responses.create(model="gpt-5-mini",input=prompt)
-                    review=resp.output_text
+                    used_provider,review=run_ai_commentary(prompt)
                     grade=""
                     for g in ["A+","A","A-","B+","B","B-","C+","C","C-","D","F"]:
                         if f"Process grade {g}" in review or f"**{g}**" in review: grade=g; break
@@ -822,7 +906,7 @@ Do not invent stats or claim to have accessed live data."""
                         st.info("AI review is temporarily unavailable, but your result was saved normally.")
             else:
                 st.success("Result saved.")
-                st.info("AI commentary is enabled, but no OPENAI_API_KEY is configured.")
+                st.info("AI commentary is enabled, but no GROQ_API_KEY or OPENAI_API_KEY is configured.")
         if r.ai_review:
             st.markdown("### Previous AI Review")
             st.write(r.ai_review)
@@ -961,7 +1045,7 @@ if page=="Settings":
     c1,c2=st.columns(2,gap="large")
     with c1:
         st.markdown("### AI commentary")
-        st.write("Use the sidebar toggle to enable or disable OpenAI commentary.")
+        st.write("Use the sidebar toggle to enable or disable AI commentary. EdgeLab prefers Groq when GROQ_API_KEY is configured and otherwise falls back to OpenAI.")
         st.success("AI commentary is enabled. API calls may use credits when analysis/review is requested.") if ai_commentary_enabled else st.info("AI commentary is off. EdgeLab will not make OpenAI API calls.")
         st.markdown("### Decision engine")
         st.caption("BET / LEAN / NO BET currently uses a transparent rule-based gate based on your probability estimate, market implied probability and evidence quality.")
@@ -972,4 +1056,5 @@ if page=="Settings":
         st.markdown("### Database")
         st.caption(f"Local database: {DB}")
         st.warning("Streamlit Community Cloud local SQLite storage may reset on redeploy/restart. Move to a persistent cloud database before relying on this for permanent history.")
+
 
