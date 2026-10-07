@@ -1,5 +1,5 @@
 
-
+  
 import streamlit as st
 import pandas as pd
 import sqlite3, os, json, math, requests
@@ -367,67 +367,77 @@ with tabs[2]:
     st.caption("Log a single or a multi. Multi legs are stored individually so you can later see which markets are helping or hurting your parlays.")
     wager_type=st.radio("Wager type",["Single","Multi / Parlay"],horizontal=True)
     if wager_type=="Single":
-        with st.form("log_single"):
-            c1,c2,c3=st.columns(3)
-            event_date=c1.date_input("Event date",date.today(),key="sdate")
-            sport=c2.selectbox("Sport",SPORTS,key="ssport")
-            league=c3.text_input("League",value="",key="sleague")
-            event=st.text_input("Event / Race",key="sevent")
-            book=st.text_input("Sportsbook",value="Sportsbet",key="sbook")
-            bt=c1.selectbox("Bet type",BET_TYPES[sport],key="sbt")
-            market=c2.text_input("Market",placeholder="Over/Under, handicap, win, place...",key="smarket")
-            selection=c3.text_input("Selection / Player / Runner",key="ssel")
-            line=c1.text_input("Line",key="sline")
-            odds=c2.number_input("Odds taken (decimal)",min_value=1.01,value=1.91,step=0.01,key="sodds")
-            close=c3.number_input("Closing odds (if known)",min_value=1.01,value=1.91,step=0.01,key="sclose")
-            stake=c1.number_input("Stake",min_value=0.0,value=20.0,step=5.0,key="sstake")
-            reasoning=st.text_area("Your reasoning",placeholder="What was your thesis? Why did you think the price was wrong?",key="sreason")
-            st.markdown("### Analysis context")
-            raw=st.text_area(f"Key factors ({FACTOR_HINTS[sport]})",placeholder="Optional. Paste relevant stats, lineup/race notes, weather, sectionals, etc.",key="sfactors")
-            source_note=st.text_input("Data source / note",value="Manual entry",key="ssource")
-            submit=st.form_submit_button("Save Single",use_container_width=True)
-            if submit:
-                cv=clv(odds,close)
-                execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (datetime.now().isoformat(),str(event_date),sport,league,event,book,bt,market,selection,line,odds,close,stake,"Pending",0,reasoning,"",cv,"","",json.dumps({"raw_factors":raw,"wager_type":"single"}),source_note))
-                st.success("Single saved."); st.rerun()
+        c1,c2,c3=st.columns(3)
+        event_date=c1.date_input("Event date",date.today(),key="sdate")
+        sport=c2.selectbox("Sport",SPORTS,key="ssport")
+        league=c3.text_input("League",value="",key="sleague")
+
+        c1,c2,c3=st.columns(3)
+        bt=c1.selectbox("Bet type",BET_TYPES.get(sport,["Other"]),key="sbt")
+        market=c2.text_input("Market",placeholder="Over/Under, handicap, win, place...",key="smarket")
+        selection=c3.text_input("Selection / Player / Runner",key="ssel")
+
+        event=st.text_input("Event / Race",key="sevent")
+        book=st.text_input("Sportsbook",value="Sportsbet",key="sbook")
+
+        c1,c2,c3=st.columns(3)
+        line=c1.text_input("Line",key="sline")
+        odds=c2.number_input("Odds taken (decimal)",min_value=1.01,value=1.91,step=0.01,key="sodds")
+        close=c3.number_input("Closing odds (if known)",min_value=1.01,value=1.91,step=0.01,key="sclose")
+        stake=st.number_input("Stake",min_value=0.0,value=20.0,step=5.0,key="sstake")
+        reasoning=st.text_area("Your reasoning",placeholder="What was your thesis? Why did you think the price was wrong?",key="sreason")
+        st.markdown("### Analysis context")
+        raw=st.text_area(f"Key factors ({FACTOR_HINTS[sport]})",placeholder="Optional. Paste relevant stats, lineup/race notes, weather, sectionals, etc.",key="sfactors")
+        source_note=st.text_input("Data source / note",value="Manual entry",key="ssource")
+
+        if st.button("Save Single",use_container_width=True,key="save_single"):
+            cv=clv(odds,close)
+            execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (datetime.now().isoformat(),str(event_date),sport,league,event,book,bt,market,selection,line,odds,close,stake,"Pending",0,reasoning,"",cv,"","",json.dumps({"raw_factors":raw,"wager_type":"single"}),source_note))
+            st.success("Single saved."); st.rerun()
     else:
-        st.info("Choose the number of legs, then fill each leg. Combined odds and potential return update automatically after you submit.")
-        nlegs=st.number_input("Number of legs",min_value=2,max_value=12,value=3,step=1)
-        with st.form("log_multi"):
-            c1,c2,c3=st.columns(3)
-            event_date=c1.date_input("Bet date / main event date",date.today(),key="mdate")
-            book=c2.text_input("Sportsbook",value="Sportsbet",key="mbook")
-            stake=c3.number_input("Stake",min_value=0.0,value=20.0,step=5.0,key="mstake")
-            multi_name=st.text_input("Multi name",placeholder="e.g. Wednesday NBA 4-leg")
-            reasoning=st.text_area("Overall multi reasoning",placeholder="Why do these legs belong in the multi? Note any correlations or risks.")
-            legs=[]
-            for i in range(int(nlegs)):
-                st.markdown(f"#### Leg {i+1}")
-                a,b,c,d=st.columns(4)
-                lsport=a.selectbox("Sport",SPORTS,key=f"lsport{i}")
-                lbet_type=b.selectbox("Bet type",BET_TYPES[lsport],key=f"lbt{i}")
-                levent=c.text_input("Event",key=f"levent{i}")
-                lodds=d.number_input("Odds",min_value=1.01,value=1.50,step=0.01,key=f"lodds{i}")
-                e,f,g,h=st.columns(4)
-                lmarket=e.text_input("Market",placeholder="Over/Under, handicap, win, place...",key=f"lmarket{i}")
-                lselection=f.text_input("Selection",key=f"lsel{i}")
-                lline=g.text_input("Line",key=f"lline{i}")
-                lnotes=h.text_input("Notes",key=f"lnotes{i}")
-                legs.append((lsport,lbet_type,levent,lmarket,lselection,lline,lodds,lnotes))
-            source_note=st.text_input("Data source / note",value="Manual entry",key="msource")
-            submit=st.form_submit_button("Save Multi",use_container_width=True)
-            if submit:
-                combined=math.prod([x[6] for x in legs])
-                label=multi_name.strip() or f"{len(legs)}-Leg Multi"
-                bet_id=execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (datetime.now().isoformat(),str(event_date),"Multi","",label,book,"Multi / Parlay","Multi",label,f"{len(legs)} legs",combined,combined,stake,"Pending",0,reasoning,"",None,"","",json.dumps({"wager_type":"multi","legs":len(legs)}),source_note))
-                for i,leg in enumerate(legs,1):
-                    execsql("INSERT INTO multi_legs(bet_id,leg_no,sport,bet_type,event,market,selection,line,odds,closing_odds,result,clv,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (bet_id,i,leg[0],leg[1],leg[2],leg[3],leg[4],leg[5],leg[6],leg[6],"Pending",None,leg[7]))
-                st.success(f"Multi saved — combined odds {combined:.2f} · potential return {money(stake*combined)} · potential profit {money(stake*(combined-1))}"); st.rerun()
+        st.info("Choose the number of legs. Each leg's Bet type changes immediately when you change that leg's sport.")
+        nlegs=st.number_input("Number of legs",min_value=2,max_value=12,value=3,step=1,key="nlegs")
+        c1,c2,c3=st.columns(3)
+        event_date=c1.date_input("Bet date / main event date",date.today(),key="mdate")
+        book=c2.text_input("Sportsbook",value="Sportsbet",key="mbook")
+        stake=c3.number_input("Stake",min_value=0.0,value=20.0,step=5.0,key="mstake")
+        multi_name=st.text_input("Multi name",placeholder="e.g. Wednesday NBA 4-leg",key="mname")
+        reasoning=st.text_area("Overall multi reasoning",placeholder="Why do these legs belong in the multi? Note any correlations or risks.",key="mreason")
+
+        legs=[]
+        for i in range(int(nlegs)):
+            st.markdown(f"#### Leg {i+1}")
+            a,b,c,d=st.columns(4)
+            lsport=a.selectbox("Sport",SPORTS,key=f"lsport{i}")
+            lbet_type=b.selectbox("Bet type",BET_TYPES.get(lsport,["Other"]),key=f"lbt{i}")
+            levent=c.text_input("Event",key=f"levent{i}")
+            lodds=d.number_input("Odds",min_value=1.01,value=1.50,step=0.01,key=f"lodds{i}")
+            e,f,g,h=st.columns(4)
+            lmarket=e.text_input("Market",placeholder="Over/Under, handicap, win, place...",key=f"lmarket{i}")
+            lselection=f.text_input("Selection",key=f"lsel{i}")
+            lline=g.text_input("Line",key=f"lline{i}")
+            lnotes=h.text_input("Notes",key=f"lnotes{i}")
+            legs.append((lsport,lbet_type,levent,lmarket,lselection,lline,lodds,lnotes))
+
+        source_note=st.text_input("Data source / note",value="Manual entry",key="msource")
+        combined=math.prod([x[6] for x in legs]) if legs else 1.0
+        m1,m2,m3=st.columns(3)
+        m1.metric("Combined odds",f"{combined:.2f}")
+        m2.metric("Potential return",money(stake*combined))
+        m3.metric("Potential profit",money(stake*(combined-1)))
+
+        if st.button("Save Multi",use_container_width=True,key="save_multi"):
+            label=multi_name.strip() or f"{len(legs)}-Leg Multi"
+            bet_id=execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (datetime.now().isoformat(),str(event_date),"Multi","",label,book,"Multi / Parlay","Multi",label,f"{len(legs)} legs",combined,combined,stake,"Pending",0,reasoning,"",None,"","",json.dumps({"wager_type":"multi","legs":len(legs)}),source_note))
+            for i,leg in enumerate(legs,1):
+                execsql("INSERT INTO multi_legs(bet_id,leg_no,sport,bet_type,event,market,selection,line,odds,closing_odds,result,clv,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (bet_id,i,leg[0],leg[1],leg[2],leg[3],leg[4],leg[5],leg[6],leg[6],"Pending",None,leg[7]))
+            st.success(f"Multi saved — combined odds {combined:.2f} · potential return {money(stake*combined)} · potential profit {money(stake*(combined-1))}")
+            st.rerun()
 
 # PRE-BET ANALYST
 with tabs[3]:
@@ -620,3 +630,4 @@ st.sidebar.caption("Betting Intelligence v4.1 · Free Data Hub")
 st.sidebar.markdown("<span class='pill'>TRACK</span><span class='pill'>REVIEW</span>", unsafe_allow_html=True)
 st.sidebar.divider()
 st.sidebar.caption("Educational analytics only. Betting involves financial risk.")
+         
