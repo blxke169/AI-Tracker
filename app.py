@@ -1,5 +1,6 @@
 
 
+
 import streamlit as st
 import pandas as pd
 import sqlite3, os, json, math, requests, html
@@ -748,6 +749,7 @@ if page=="Analyse Bet":
     st.markdown("<div class='page-kicker'>Decision engine</div><div class='page-title'>Analyse Bet</div>",unsafe_allow_html=True)
     st.caption("A decision gate, not a pick generator. It can return BET, LEAN or NO BET and must not invent missing evidence.")
     with st.form("prebet"):
+        st.caption("Rule Gate = market math using your probability estimate. Evidence Verdict = whether the thesis is supported by verified data. These can disagree, and that is intentional.")
         c1,c2,c3=st.columns(3)
         asport=c1.selectbox("Sport",SPORTS,key="asport")
         aselection=c2.text_input("Selection",placeholder="Player / team / runner")
@@ -806,28 +808,86 @@ if page=="Analyse Bet":
             st.info("AI commentary is switched off. No AI API call was made. The rule-based decision and evidence checks above are still active.")
         elif provider:
             try:
-                prompt=f"""Act as a conservative betting process analyst. Do not invent facts, statistics, injuries, odds movement, or live data.
+                # Keep the mathematical rule gate separate from the evidence verdict.
+                # Rule Gate = price math based on user probability vs market.
+                # Evidence Verdict = whether the claimed edge is actually supported by verified evidence.
+                exact_data_text = json.dumps(data_ctx, default=str) if data_ctx else "[]"
+                prompt=f"""You are EdgeLab's conservative betting evidence auditor.
+
+NON-NEGOTIABLE RULES:
+- Never invent or infer factual sports data.
+- Never present general knowledge, memory, or assumptions as verified facts.
+- You may ONLY classify a statement as VERIFIED DATA if it appears explicitly in CONNECTED DATA below.
+- Anything the user wrote but that is not in CONNECTED DATA must be labeled USER-SUPPLIED CLAIM.
+- Anything not in either source must be labeled UNKNOWN / UNVERIFIED.
+- Do not silently upgrade a user claim into a fact.
+- Do not use phrases like "career data shows", "recent seasons show", "reportedly", "is known for", or similar unless the exact supporting fact appears in CONNECTED DATA.
+- If the opponent is not explicitly identified in connected data, do not invent opponent-specific defensive analysis.
+- Never upgrade a NO BET rule gate to BET.
+- The evidence verdict may be stricter than the rule gate.
+
+INPUTS
 SPORT: {asport}
 SELECTION: {aselection}
 MARKET: {amarket}
 ODDS: {aodds}
 MARKET IMPLIED PROBABILITY: {implied:.2f}%
 USER PROBABILITY: {aprob if aprob else 'not supplied'}%
-EVIDENCE QUALITY: {confidence}
-SUPPLIED EVIDENCE: {evidence}
-CONNECTED DATA AVAILABLE: {'yes' if data_ctx else 'no'}
-SAFETY GATE: {gate} — {reason}
+RULE GATE: {gate}
+RULE GATE REASON: {reason}
+EVIDENCE QUALITY SELECTED BY USER: {confidence}
 
-Critique the user's thesis rather than agreeing with it. Separate claims supported by supplied/connected evidence from assumptions. Use five short sections:
-1. Verdict
-2. Price / Edge
-3. Evidence that supports the thesis
-4. Risks / Missing Data
-5. What would change the decision
+USER-SUPPLIED REASONING:
+{evidence}
 
-Never upgrade a NO BET safety gate to BET. If exact player or market data is missing, say that clearly."""
+CONNECTED DATA:
+{exact_data_text}
+
+TASK
+Return exactly these sections:
+
+1. RULE GATE
+State the rule gate exactly as supplied and summarize the price math.
+
+2. EVIDENCE VERDICT
+Choose one of:
+- SUPPORTED BET
+- LEAN / NEEDS MORE DATA
+- NO BET FOR NOW
+The evidence verdict must depend on the provenance and sufficiency of evidence, not just the user's probability estimate.
+
+3. VERIFIED DATA
+List only facts explicitly found in CONNECTED DATA.
+If none, write: "No exact verified player/market data available."
+
+4. USER-SUPPLIED CLAIMS
+List the key claims from the user's reasoning that are not independently verified by CONNECTED DATA.
+
+5. UNKNOWN / UNVERIFIED
+List the most important missing items that should be checked before relying on the probability estimate.
+
+6. WHAT WOULD CHANGE THE DECISION
+State exactly what additional verified information would strengthen or weaken the case.
+
+Be concise, skeptical, and explicit about source provenance."""
                 used_provider,assessment=run_ai_commentary(prompt)
-                st.markdown(f"### AI assessment · {used_provider}")
+                st.markdown("### Decision layers")
+                d1,d2=st.columns(2)
+                with d1:
+                    gate_class="badge-bet" if gate=="BET" else "badge-lean" if gate=="LEAN" else "badge-nobet"
+                    st.markdown(
+                        f"<div class='panel'><div class='page-kicker'>Rule Gate</div>"
+                        f"<span class='badge {gate_class}'>{gate}</span>"
+                        f"<div class='page-copy' style='margin-top:8px'>{reason}</div></div>",
+                        unsafe_allow_html=True
+                    )
+                with d2:
+                    st.markdown(
+                        "<div class='panel'><div class='page-kicker'>Evidence Layer</div>"
+                        "<div class='page-copy'>The AI may be stricter than the rule gate when claims are not independently verified.</div></div>",
+                        unsafe_allow_html=True
+                    )
+                st.markdown(f"### AI evidence assessment · {used_provider}")
                 st.write(assessment)
             except Exception as ex:
                 msg=str(ex).lower()
