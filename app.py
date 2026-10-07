@@ -1,6 +1,7 @@
 
 
 
+
 import streamlit as st
 import pandas as pd
 import sqlite3, os, json, math, requests, html
@@ -185,6 +186,208 @@ def latest_context(sport, search_text="", limit=8):
         hit=df[mask]
         if not hit.empty: df=hit
     return df.head(limit).to_dict("records")
+
+
+# ---------------- UNIFIED SPORTS DATA LAYER ----------------
+# ESPN's public site endpoints are useful free starting sources but are not a
+# contracted/guaranteed API. EdgeLab labels the source accurately and never
+# treats absent fields as verified facts.
+
+ESPN_FEEDS = {
+    "NBA": ("basketball","nba"),
+    "NFL": ("football","nfl"),
+    "NHL": ("hockey","nhl"),
+    "MLB": ("baseball","mlb"),
+    "NCAAB": ("basketball","mens-college-basketball"),
+    "NCAAF": ("football","college-football"),
+}
+SOCCER_LEAGUES = {
+    "EPL":"eng.1",
+    "UEFA Champions League":"uefa.champions",
+    "La Liga":"esp.1",
+    "Serie A":"ita.1",
+    "Bundesliga":"ger.1",
+    "Ligue 1":"fra.1",
+    "MLS":"usa.1",
+    "A-League Men":"aus.1",
+}
+TENNIS_CIRCUITS = {"ATP":"atp","WTA":"wta"}
+
+def _date_token(day):
+    if hasattr(day,"strftime"):
+        return day.strftime("%Y%m%d")
+    return str(day).replace("-","")
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_espn_scoreboard(sport, day=None, league_code=None):
+    day_token=_date_token(day or date.today())
+    if sport in ESPN_FEEDS:
+        category,league=ESPN_FEEDS[sport]
+    elif sport=="Soccer":
+        category,league="soccer",(league_code or SOCCER_LEAGUES["EPL"])
+    elif sport=="Tennis":
+        category,league="tennis",(league_code or TENNIS_CIRCUITS["ATP"])
+    else:
+        return []
+    url=f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/scoreboard?dates={day_token}"
+    r=requests.get(url,timeout=18,headers={"User-Agent":"EdgeLab/1.0"})
+    r.raise_for_status()
+    raw=r.json()
+    out=[]
+    for e in raw.get("events",[]):
+        comp=(e.get("competitions") or [{}])[0]
+        competitors=[]
+        for c in comp.get("competitors",[]):
+            competitors.append({
+                "id":c.get("id"),
+                "name":c.get("team",{}).get("displayName") or c.get("athlete",{}).get("displayName"),
+                "homeAway":c.get("homeAway"),
+                "score":c.get("score"),
+                "winner":c.get("winner"),
+                "records":c.get("records"),
+            })
+        out.append({
+            "id":e.get("id"),
+            "name":e.get("name") or e.get("shortName"),
+            "date":e.get("date"),
+            "status":e.get("status",{}).get("type",{}).get("description"),
+            "competitors":competitors,
+            "league":league,
+            "category":category,
+        })
+    return out
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_espn_summary(sport, event_id, league_code=None):
+    if sport in ESPN_FEEDS:
+        category,league=ESPN_FEEDS[sport]
+    elif sport=="Soccer":
+        category,league="soccer",(league_code or SOCCER_LEAGUES["EPL"])
+    elif sport=="Tennis":
+        category,league="tennis",(league_code or TENNIS_CIRCUITS["ATP"])
+    else:
+        return {}
+    url=f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary?event={event_id}"
+    r=requests.get(url,timeout=20,headers={"User-Agent":"EdgeLab/1.0"})
+    r.raise_for_status()
+    return r.json()
+
+def _collect_named_athletes(obj, found=None):
+    """Extract player/athlete names and nearby stat objects from nested JSON."""
+    if found is None: found=[]
+    if isinstance(obj,dict):
+        name=None
+        if isinstance(obj.get("athlete"),dict):
+            name=obj["athlete"].get("displayName") or obj["athlete"].get("fullName")
+        name=name or obj.get("displayName") if obj.get("displayName") and any(k in obj for k in ("stats","statistics","athlete")) else name
+        if name:
+            found.append({"name":name,"data":obj})
+        for v in obj.values():
+            _collect_named_athletes(v,found)
+    elif isinstance(obj,list):
+        for v in obj:
+            _collect_named_athletes(v,found)
+    return found
+
+def save_espn_event_bundle(sport, event, league_code=None, include_summary=True):
+    event_name=event.get("name") or f"{sport} event"
+    save_event_snapshot(sport,event_name,"scoreboard",event,f"ESPN public {sport} scoreboard")
+    if include_summary and event.get("id"):
+        try:
+            summary=fetch_espn_summary(sport,event["id"],league_code)
+            save_event_snapshot(sport,event_name,"event summary",summary,f"ESPN public {sport} summary")
+            seen=set()
+            for item in _collect_named_athletes(summary):
+                nm=str(item.get("name") or "").strip()
+                if nm and nm.lower() not in seen:
+                    seen.add(nm.lower())
+                    save_event_snapshot(sport,event_name,nm,item.get("data"),f"ESPN public {sport} summary")
+        except Exception:
+            pass
+
+def sync_espn_sport(sport, days=1, league_code=None, include_summary=True, max_events=40):
+    saved=0
+    event_count=0
+    for offset in range(max(1,int(days))):
+        d=date.today()-pd.Timedelta(days=offset)
+        try:
+            games=fetch_espn_scoreboard(sport,d,league_code)
+        except Exception:
+            continue
+        for g in games:
+            if event_count>=max_events:
+                return saved,event_count
+            save_espn_event_bundle(sport,g,league_code,include_summary)
+            event_count+=1
+            saved+=1
+    return saved,event_count
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_squiggle_games(year=None):
+    year=int(year or date.today().year)
+    url=f"https://api.squiggle.com.au/?q=games;year={year}"
+    r=requests.get(url,headers={"User-Agent":"EdgeLab-Betting-Tracker/1.0"},timeout=18)
+    r.raise_for_status()
+    games=r.json().get("games",[])
+    return sorted(games,key=lambda x:str(x.get("date","")),reverse=True)
+
+def fetch_configured_json(url_secret, key_secret=None, params=None):
+    url=_secret(url_secret)
+    if not url:
+        return None
+    headers={"User-Agent":"EdgeLab/1.0","Accept":"application/json"}
+    key=_secret(key_secret) if key_secret else ""
+    if key:
+        headers["Authorization"]=f"Bearer {key}"
+        headers["X-API-Key"]=key
+    r=requests.get(url,params=params or {},headers=headers,timeout=25)
+    r.raise_for_status()
+    return r.json()
+
+def save_generic_feed(sport,payload,source_name):
+    if payload is None:
+        return 0
+    rows=payload if isinstance(payload,list) else payload.get("data") if isinstance(payload,dict) and isinstance(payload.get("data"),list) else [payload]
+    n=0
+    for i,row in enumerate(rows[:500]):
+        if not isinstance(row,(dict,list)):
+            row={"value":row}
+        if isinstance(row,dict):
+            event=(row.get("event") or row.get("race") or row.get("meeting") or row.get("name") or row.get("fixture") or f"{sport} data")
+            subject=(row.get("player") or row.get("runner") or row.get("dog") or row.get("horse") or row.get("selection") or row.get("subject") or "structured feed")
+            if isinstance(subject,dict):
+                subject=subject.get("name") or subject.get("displayName") or "structured feed"
+        else:
+            event=f"{sport} data"; subject="structured feed"
+        save_event_snapshot(sport,str(event),str(subject),row,source_name)
+        n+=1
+    return n
+
+def import_structured_csv(sport, uploaded_file, source_name="User imported structured CSV"):
+    df=pd.read_csv(uploaded_file)
+    n=0
+    for _,row in df.head(1000).iterrows():
+        data=row.to_dict()
+        event=str(data.get("event") or data.get("race") or data.get("fixture") or data.get("match") or f"{sport} imported row")
+        subject=str(data.get("player") or data.get("runner") or data.get("horse") or data.get("greyhound") or data.get("selection") or data.get("subject") or "imported row")
+        save_event_snapshot(sport,event,subject,data,source_name)
+        n+=1
+    return n
+
+def source_status_for_sport(sport):
+    if sport in ESPN_FEEDS:
+        return "Free public ESPN scoreboard + event summaries/player stat objects where supplied"
+    if sport=="AFL":
+        return "Free Squiggle fixtures/results + optional AFL_PLAYER_API_URL or CSV for player-level verification"
+    if sport=="Soccer":
+        return "Free public ESPN league scoreboards/summaries + optional provider import"
+    if sport=="Tennis":
+        return "Free public ESPN ATP/WTA scoreboards/summaries + optional provider import"
+    if sport=="Horses":
+        return "Configured HORSE_DATA_API_URL or structured CSV import required for runner-level verification"
+    if sport=="Greyhounds":
+        return "Configured GREYHOUND_DATA_API_URL or structured CSV import required for runner-level verification"
+    return "Connector available through structured import"
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_nba_scoreboard(day=None):
@@ -778,6 +981,7 @@ if page=="Analyse Bet":
         x2.metric("Your probability",f"{aprob:.1f}%" if aprob else "Not supplied")
         x3.metric("Estimated edge",f"{edge:.1f} pp" if edge is not None else "Unknown")
         data_ctx=latest_context(asport, aselection or amarket, 8)
+        st.caption(f"Verification source: {source_status_for_sport(asport)}")
         if data_ctx:
             st.markdown("### Connected data context")
             st.caption("Recent structured snapshots stored by EdgeLab. These are context only unless they contain the exact player/market information needed.")
@@ -818,7 +1022,7 @@ NON-NEGOTIABLE RULES:
 - Never invent or infer factual sports data.
 - Never present general knowledge, memory, or assumptions as verified facts.
 - You may ONLY classify a statement as VERIFIED DATA if it appears explicitly in CONNECTED DATA below.
-- Anything the user wrote but that is not in CONNECTED DATA must be labeled USER-SUPPLIED CLAIM.
+- A scoreboard/event-level record does NOT verify a player-level claim unless that player and the relevant statistic are explicitly present in that record.\n- Anything the user wrote but that is not in CONNECTED DATA must be labeled USER-SUPPLIED CLAIM.
 - Anything not in either source must be labeled UNKNOWN / UNVERIFIED.
 - Do not silently upgrade a user claim into a fact.
 - Do not use phrases like "career data shows", "recent seasons show", "reportedly", "is known for", or similar unless the exact supporting fact appears in CONNECTED DATA.
@@ -1045,60 +1249,139 @@ if page=="Bet History":
             st.rerun()
 
 if page=="Data Hub":
-    st.markdown("<div class='page-kicker'>Odds, stats & models</div><div class='page-title'>Data Hub</div>",unsafe_allow_html=True)
-    st.write("Pull free structured data into EdgeLab, store snapshots in the database, and make that context available to the pre-bet and post-game AI reviews.")
-    c1,c2=st.columns(2)
-    with c1:
-        st.markdown("### 🏀 NBA — free scoreboard/results")
-        nba_day=st.date_input("NBA date",value=date.today(),key="nba_data_day")
-        if st.button("Fetch NBA data",use_container_width=True):
-            try:
-                games=fetch_nba_scoreboard(nba_day)
-                for g in games: save_event_snapshot("NBA",g.get("name") or "NBA game","scoreboard",g,"ESPN public scoreboard")
-                st.success(f"Saved {len(games)} NBA game snapshots.")
-                if games: st.dataframe(pd.DataFrame(games),use_container_width=True,hide_index=True)
-            except Exception as ex: st.error(f"NBA fetch failed: {ex}")
-        st.caption("Free starting layer: schedule, scores and game status. Player prop logs/advanced stats are the next connector.")
-    with c2:
-        st.markdown("### 🏉 AFL — free fixtures/results")
-        afl_year=st.number_input("AFL season",min_value=2000,max_value=2100,value=date.today().year,step=1)
-        if st.button("Fetch AFL data",use_container_width=True):
-            try:
-                games=fetch_afl_games(afl_year)
-                for g in games:
-                    event=f"{g.get('hteam','')} v {g.get('ateam','')}"
-                    save_event_snapshot("AFL",event,"fixture/result",g,"Squiggle API")
-                st.success(f"Saved {len(games)} AFL game snapshots.")
-                if games: st.dataframe(pd.DataFrame(games),use_container_width=True,hide_index=True)
-            except Exception as ex: st.error(f"AFL fetch failed: {ex}")
-        st.caption("Squiggle gives us a free AFL fixture/results foundation. Detailed player props/CBA/TOG need a separate data source.")
-    stored=q("SELECT captured_at,sport,event,subject,source FROM event_data ORDER BY captured_at DESC LIMIT 50")
-    if not stored.empty:
-        st.markdown("### Latest stored data")
-        st.dataframe(stored,use_container_width=True,hide_index=True)
-    st.markdown("### Sportsbet / odds")
-    st.info("The app records Sportsbet as the default bookmaker, but a live Sportsbet feed/API must be supplied or connected. This build does not pretend to have direct Sportsbet access when no authenticated feed is available.")
-    st.markdown("### API configuration")
-    st.code("""# Optional environment variables
-OPENAI_API_KEY=...
-ODDS_API_KEY=...        # e.g. an odds provider that includes your required bookmaker
-SPORTSBET_API_URL=...   # only if you have an authorized Sportsbet feed
-SPORTSBET_API_KEY=...   # only if required by that feed""")
-    st.markdown("### Importing external data")
-    up=st.file_uploader("Import odds/event CSV",type=["csv"])
-    if up:
-        imp=pd.read_csv(up)
-        st.write(imp.head())
-        if st.button("Import rows as odds snapshots"):
-            required={"sport","event","market","selection","odds"}
-            if required.issubset(set(imp.columns)):
-                for _,x in imp.iterrows():
-                    execsql("INSERT INTO odds_snapshots(captured_at,sport,event,market,selection,line,bookmaker,odds,source) VALUES(?,?,?,?,?,?,?,?,?)",
-                            (datetime.now().isoformat(),x.get("sport",""),x.get("event",""),x.get("market",""),x.get("selection",""),x.get("line",""),x.get("bookmaker","Sportsbet"),float(x.get("odds",0)), "CSV import"))
-                st.success(f"Imported {len(imp)} odds rows.")
-                st.rerun()
-            else: st.error("CSV needs at least: sport,event,market,selection,odds")
+    st.markdown("<div class='page-kicker'>Odds, stats & verification</div><div class='page-title'>Data Hub</div>",unsafe_allow_html=True)
+    st.write("EdgeLab can now store verification data for every supported sport. A claim is only marked verified when the exact supporting information exists in stored structured data.")
 
+    st.markdown("### Coverage")
+    coverage=pd.DataFrame([{"Sport":s,"Verification path":source_status_for_sport(s)} for s in SPORTS])
+    st.dataframe(coverage,use_container_width=True,hide_index=True)
+
+    st.markdown("### 1) US sports + soccer + tennis")
+    c1,c2,c3=st.columns(3)
+    sync_sport=c1.selectbox("Sport to sync",["NBA","NFL","NHL","MLB","NCAAB","NCAAF","Soccer","Tennis"],key="sync_sport")
+    lookback=c2.number_input("Lookback days",min_value=1,max_value=45,value=7,step=1,key="sync_days")
+    include_summary=c3.checkbox("Fetch event/player detail",value=True,key="sync_summary")
+
+    league_code=None
+    if sync_sport=="Soccer":
+        label=st.selectbox("Soccer competition",list(SOCCER_LEAGUES.keys()),key="soccer_comp")
+        league_code=SOCCER_LEAGUES[label]
+    elif sync_sport=="Tennis":
+        label=st.selectbox("Tennis circuit",list(TENNIS_CIRCUITS.keys()),key="tennis_circuit")
+        league_code=TENNIS_CIRCUITS[label]
+
+    if st.button("Sync selected sport",use_container_width=True,key="sync_selected"):
+        with st.spinner(f"Fetching {sync_sport} structured data…"):
+            try:
+                saved,events=sync_espn_sport(sync_sport,lookback,league_code,include_summary,max_events=60)
+                st.success(f"Stored {saved} {sync_sport} event bundle(s). Exact player fields are only verified when the source returned them.")
+            except Exception as ex:
+                st.error(f"{sync_sport} sync failed: {ex}")
+
+    st.caption("ESPN site endpoints are a free public starting source, not a guaranteed contracted API. EdgeLab records the source explicitly and does not invent fields that are absent.")
+
+    st.markdown("### 2) AFL")
+    a1,a2=st.columns(2)
+    afl_year=a1.number_input("AFL season",min_value=2000,max_value=2100,value=date.today().year,step=1,key="afl_year_full")
+    if a2.button("Sync Squiggle AFL fixtures/results",use_container_width=True,key="sync_afl"):
+        try:
+            games=fetch_squiggle_games(afl_year)
+            for g in games[:250]:
+                event=f"{g.get('hteam','')} v {g.get('ateam','')}"
+                save_event_snapshot("AFL",event,"fixture/result",g,"Squiggle API")
+            st.success(f"Stored {min(len(games),250)} AFL fixture/result snapshots.")
+        except Exception as ex:
+            st.error(f"AFL sync failed: {ex}")
+
+    st.caption("For AFL player props such as disposals, marks, tackles, TOG or CBA, configure AFL_PLAYER_API_URL in Streamlit Secrets or import a structured CSV below.")
+    if st.button("Fetch configured AFL player feed",use_container_width=True,key="afl_player_feed"):
+        try:
+            payload=fetch_configured_json("AFL_PLAYER_API_URL","AFL_PLAYER_API_KEY")
+            if payload is None:
+                st.info("No AFL_PLAYER_API_URL is configured.")
+            else:
+                n=save_generic_feed("AFL",payload,"Configured AFL player feed")
+                st.success(f"Stored {n} AFL player-data row(s).")
+        except Exception as ex:
+            st.error(f"AFL player feed failed: {ex}")
+
+    st.markdown("### 3) Australian horses + greyhounds")
+    r1,r2=st.columns(2)
+    with r1:
+        st.markdown("#### 🐎 Horses")
+        if st.button("Fetch configured horse feed",use_container_width=True,key="horse_feed"):
+            try:
+                payload=fetch_configured_json("HORSE_DATA_API_URL","HORSE_DATA_API_KEY")
+                if payload is None:
+                    st.info("No HORSE_DATA_API_URL is configured yet.")
+                else:
+                    n=save_generic_feed("Horses",payload,"Configured horse racing feed")
+                    st.success(f"Stored {n} horse-racing row(s).")
+            except Exception as ex:
+                st.error(f"Horse feed failed: {ex}")
+        horse_csv=st.file_uploader("Import horse data CSV",type=["csv"],key="horse_csv")
+        if horse_csv is not None and st.button("Store horse CSV",key="store_horse_csv"):
+            try:
+                n=import_structured_csv("Horses",horse_csv)
+                st.success(f"Stored {n} horse rows.")
+            except Exception as ex:
+                st.error(f"Horse import failed: {ex}")
+    with r2:
+        st.markdown("#### 🐕 Greyhounds")
+        if st.button("Fetch configured greyhound feed",use_container_width=True,key="grey_feed"):
+            try:
+                payload=fetch_configured_json("GREYHOUND_DATA_API_URL","GREYHOUND_DATA_API_KEY")
+                if payload is None:
+                    st.info("No GREYHOUND_DATA_API_URL is configured yet.")
+                else:
+                    n=save_generic_feed("Greyhounds",payload,"Configured greyhound racing feed")
+                    st.success(f"Stored {n} greyhound row(s).")
+            except Exception as ex:
+                st.error(f"Greyhound feed failed: {ex}")
+        grey_csv=st.file_uploader("Import greyhound data CSV",type=["csv"],key="grey_csv")
+        if grey_csv is not None and st.button("Store greyhound CSV",key="store_grey_csv"):
+            try:
+                n=import_structured_csv("Greyhounds",grey_csv)
+                st.success(f"Stored {n} greyhound rows.")
+            except Exception as ex:
+                st.error(f"Greyhound import failed: {ex}")
+
+    st.markdown("### 4) Odds / bookmaker layer")
+    st.info("Sportsbet prices are only treated as verified when they come from an authorized feed you configure. EdgeLab will not label scraped or unverified bookmaker prices as Sportsbet data.")
+    if st.button("Fetch configured odds feed",use_container_width=True,key="odds_feed"):
+        try:
+            payload=fetch_configured_json("ODDS_API_URL","ODDS_API_KEY")
+            if payload is None:
+                st.info("No ODDS_API_URL is configured.")
+            else:
+                n=save_generic_feed("Odds",payload,"Configured authorized odds feed")
+                st.success(f"Stored {n} odds-feed row(s).")
+        except Exception as ex:
+            st.error(f"Odds feed failed: {ex}")
+
+    st.markdown("### Streamlit Secrets")
+    st.code("""# Optional player/racing/bookmaker feeds
+AFL_PLAYER_API_URL = "https://provider.example/..."
+AFL_PLAYER_API_KEY = "..."
+
+HORSE_DATA_API_URL = "https://provider.example/..."
+HORSE_DATA_API_KEY = "..."
+
+GREYHOUND_DATA_API_URL = "https://provider.example/..."
+GREYHOUND_DATA_API_KEY = "..."
+
+ODDS_API_URL = "https://authorized-provider.example/..."
+ODDS_API_KEY = "..."
+
+# AI commentary
+GROQ_API_KEY = "..."
+""",language="toml")
+    st.caption("Do not copy the example URLs literally. Replace them only with real provider endpoints you are authorized to use.")
+
+    stored=q("SELECT captured_at,sport,event,subject,source FROM event_data ORDER BY captured_at DESC LIMIT 100")
+    if not stored.empty:
+        st.markdown("### Latest stored verification data")
+        st.dataframe(stored,use_container_width=True,hide_index=True,height=420)
 
 if page=="Settings":
     st.markdown("<div class='page-kicker'>Preferences & system status</div><div class='page-title'>Settings</div><div class='page-copy'>Control AI usage and check what data layers are active.</div>",unsafe_allow_html=True)
@@ -1116,5 +1399,6 @@ if page=="Settings":
         st.markdown("### Database")
         st.caption(f"Local database: {DB}")
         st.warning("Streamlit Community Cloud local SQLite storage may reset on redeploy/restart. Move to a persistent cloud database before relying on this for permanent history.")
+
 
 
