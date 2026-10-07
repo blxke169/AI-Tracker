@@ -1,7 +1,8 @@
 
+
 import streamlit as st
 import pandas as pd
-import sqlite3, os, json, math
+import sqlite3, os, json, math, requests
 from datetime import datetime, date
 from pathlib import Path
 
@@ -92,6 +93,14 @@ def conn():
     c.execute("""CREATE TABLE IF NOT EXISTS bankroll_transactions(
       id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, txn_date TEXT,
       txn_type TEXT, amount REAL, note TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS multi_legs(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, bet_id INTEGER, leg_no INTEGER, sport TEXT, event TEXT,
+      bet_type TEXT, market TEXT, selection TEXT, line TEXT, odds REAL, closing_odds REAL, result TEXT DEFAULT 'Pending',
+      clv REAL, notes TEXT, FOREIGN KEY(bet_id) REFERENCES bets(id))""")
+    # Lightweight migration for existing V4 databases created before multi-leg bet types were added.
+    multi_cols={row[1] for row in c.execute("PRAGMA table_info(multi_legs)").fetchall()}
+    if "bet_type" not in multi_cols:
+        c.execute("ALTER TABLE multi_legs ADD COLUMN bet_type TEXT")
     c.execute("INSERT OR IGNORE INTO bankroll_settings(id,starting_bankroll,unit_percent,staking_mode,kelly_fraction) VALUES(1,1000,1.0,'Flat units',0.25)")
     c.commit()
     return c
@@ -119,6 +128,43 @@ def pct(x):
     try:return f"{x:.2f}%"
     except:return "—"
 
+def save_event_snapshot(sport,event,subject,payload,source):
+    execsql("INSERT INTO event_data(captured_at,sport,event,subject,data_json,source) VALUES(?,?,?,?,?,?)",
+            (datetime.now().isoformat(),sport,event,subject,json.dumps(payload),source))
+
+def latest_context(sport, search_text="", limit=8):
+    df=q("SELECT * FROM event_data WHERE sport=? ORDER BY captured_at DESC LIMIT 80",(sport,))
+    if df.empty: return []
+    if search_text.strip():
+        term=search_text.strip().lower()
+        mask=df.apply(lambda r: term in (str(r.get("event",""))+" "+str(r.get("subject",""))+" "+str(r.get("data_json",""))).lower(),axis=1)
+        hit=df[mask]
+        if not hit.empty: df=hit
+    return df.head(limit).to_dict("records")
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_nba_scoreboard(day=None):
+    day=(day or date.today()).strftime("%Y%m%d") if hasattr((day or date.today()),"strftime") else str(day).replace("-","")
+    url=f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={day}"
+    r=requests.get(url,timeout=15); r.raise_for_status(); raw=r.json()
+    out=[]
+    for e in raw.get("events",[]):
+        comp=(e.get("competitions") or [{}])[0]
+        teams=[]
+        for c in comp.get("competitors",[]):
+            teams.append({"team":c.get("team",{}).get("displayName"),"homeAway":c.get("homeAway"),"score":c.get("score")})
+        out.append({"id":e.get("id"),"name":e.get("name"),"date":e.get("date"),"status":e.get("status",{}).get("type",{}).get("description"),"teams":teams})
+    return out
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_afl_games(year=None):
+    year=int(year or date.today().year)
+    url=f"https://api.squiggle.com.au/?q=games;year={year}"
+    r=requests.get(url,headers={"User-Agent":"EdgeLab-Betting-Tracker/1.0"},timeout=15); r.raise_for_status()
+    games=r.json().get("games",[])
+    games=sorted(games,key=lambda x:str(x.get("date","")),reverse=True)
+    return games[:120]
+
 conn().close()
 
 st.markdown("""
@@ -129,7 +175,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-tabs=st.tabs(["📊 Dashboard","💰 Bankroll","＋ Log Bet","✨ AI Review","🗂 Database","🔌 Data Sources"])
+tabs=st.tabs(["📊 Dashboard","💰 Bankroll","＋ Log Bet","🧠 Pre-Bet Analyst","✨ AI Review","🗂 Database","🔌 Data Sources"])
 
 # DASHBOARD
 with tabs[0]:
@@ -318,38 +364,125 @@ with tabs[1]:
 # LOG BET
 with tabs[2]:
     st.markdown("## Log a bet")
-    st.caption("Capture the price and thesis at the time you place the wager. Optional context can be added now or later.")
-    with st.form("log"):
+    st.caption("Log a single or a multi. Multi legs are stored individually so you can later see which markets are helping or hurting your parlays.")
+    wager_type=st.radio("Wager type",["Single","Multi / Parlay"],horizontal=True)
+    if wager_type=="Single":
+        with st.form("log_single"):
+            c1,c2,c3=st.columns(3)
+            event_date=c1.date_input("Event date",date.today(),key="sdate")
+            sport=c2.selectbox("Sport",SPORTS,key="ssport")
+            league=c3.text_input("League",value="",key="sleague")
+            event=st.text_input("Event / Race",key="sevent")
+            book=st.text_input("Sportsbook",value="Sportsbet",key="sbook")
+            bt=c1.selectbox("Bet type",BET_TYPES[sport],key="sbt")
+            market=c2.text_input("Market",placeholder="Over/Under, handicap, win, place...",key="smarket")
+            selection=c3.text_input("Selection / Player / Runner",key="ssel")
+            line=c1.text_input("Line",key="sline")
+            odds=c2.number_input("Odds taken (decimal)",min_value=1.01,value=1.91,step=0.01,key="sodds")
+            close=c3.number_input("Closing odds (if known)",min_value=1.01,value=1.91,step=0.01,key="sclose")
+            stake=c1.number_input("Stake",min_value=0.0,value=20.0,step=5.0,key="sstake")
+            reasoning=st.text_area("Your reasoning",placeholder="What was your thesis? Why did you think the price was wrong?",key="sreason")
+            st.markdown("### Analysis context")
+            raw=st.text_area(f"Key factors ({FACTOR_HINTS[sport]})",placeholder="Optional. Paste relevant stats, lineup/race notes, weather, sectionals, etc.",key="sfactors")
+            source_note=st.text_input("Data source / note",value="Manual entry",key="ssource")
+            submit=st.form_submit_button("Save Single",use_container_width=True)
+            if submit:
+                cv=clv(odds,close)
+                execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (datetime.now().isoformat(),str(event_date),sport,league,event,book,bt,market,selection,line,odds,close,stake,"Pending",0,reasoning,"",cv,"","",json.dumps({"raw_factors":raw,"wager_type":"single"}),source_note))
+                st.success("Single saved."); st.rerun()
+    else:
+        st.info("Choose the number of legs, then fill each leg. Combined odds and potential return update automatically after you submit.")
+        nlegs=st.number_input("Number of legs",min_value=2,max_value=12,value=3,step=1)
+        with st.form("log_multi"):
+            c1,c2,c3=st.columns(3)
+            event_date=c1.date_input("Bet date / main event date",date.today(),key="mdate")
+            book=c2.text_input("Sportsbook",value="Sportsbet",key="mbook")
+            stake=c3.number_input("Stake",min_value=0.0,value=20.0,step=5.0,key="mstake")
+            multi_name=st.text_input("Multi name",placeholder="e.g. Wednesday NBA 4-leg")
+            reasoning=st.text_area("Overall multi reasoning",placeholder="Why do these legs belong in the multi? Note any correlations or risks.")
+            legs=[]
+            for i in range(int(nlegs)):
+                st.markdown(f"#### Leg {i+1}")
+                a,b,c,d=st.columns(4)
+                lsport=a.selectbox("Sport",SPORTS,key=f"lsport{i}")
+                lbet_type=b.selectbox("Bet type",BET_TYPES[lsport],key=f"lbt{i}")
+                levent=c.text_input("Event",key=f"levent{i}")
+                lodds=d.number_input("Odds",min_value=1.01,value=1.50,step=0.01,key=f"lodds{i}")
+                e,f,g,h=st.columns(4)
+                lmarket=e.text_input("Market",placeholder="Over/Under, handicap, win, place...",key=f"lmarket{i}")
+                lselection=f.text_input("Selection",key=f"lsel{i}")
+                lline=g.text_input("Line",key=f"lline{i}")
+                lnotes=h.text_input("Notes",key=f"lnotes{i}")
+                legs.append((lsport,lbet_type,levent,lmarket,lselection,lline,lodds,lnotes))
+            source_note=st.text_input("Data source / note",value="Manual entry",key="msource")
+            submit=st.form_submit_button("Save Multi",use_container_width=True)
+            if submit:
+                combined=math.prod([x[6] for x in legs])
+                label=multi_name.strip() or f"{len(legs)}-Leg Multi"
+                bet_id=execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (datetime.now().isoformat(),str(event_date),"Multi","",label,book,"Multi / Parlay","Multi",label,f"{len(legs)} legs",combined,combined,stake,"Pending",0,reasoning,"",None,"","",json.dumps({"wager_type":"multi","legs":len(legs)}),source_note))
+                for i,leg in enumerate(legs,1):
+                    execsql("INSERT INTO multi_legs(bet_id,leg_no,sport,bet_type,event,market,selection,line,odds,closing_odds,result,clv,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (bet_id,i,leg[0],leg[1],leg[2],leg[3],leg[4],leg[5],leg[6],leg[6],"Pending",None,leg[7]))
+                st.success(f"Multi saved — combined odds {combined:.2f} · potential return {money(stake*combined)} · potential profit {money(stake*(combined-1))}"); st.rerun()
+
+# PRE-BET ANALYST
+with tabs[3]:
+    st.markdown("## 🧠 Pre-Bet Analyst")
+    st.caption("A decision gate, not a pick generator. It can return BET, LEAN or NO BET and must not invent missing evidence.")
+    with st.form("prebet"):
         c1,c2,c3=st.columns(3)
-        event_date=c1.date_input("Event date",date.today())
-        sport=c2.selectbox("Sport",SPORTS)
-        league=c3.text_input("League",value="")
-        event=st.text_input("Event / Race")
-        book=st.text_input("Sportsbook",value="Sportsbet")
-        bt=c1.selectbox("Bet type",BET_TYPES[sport])
-        market=c2.text_input("Market",placeholder="Over/Under, handicap, win, place...")
-        selection=c3.text_input("Selection / Player / Runner")
-        line=c1.text_input("Line")
-        odds=c2.number_input("Odds taken (decimal)",min_value=1.01,value=1.91,step=0.01)
-        close=c3.number_input("Closing odds (if known)",min_value=1.01,value=1.91,step=0.01)
-        stake=c1.number_input("Stake",min_value=0.0,value=20.0,step=5.0)
-        reasoning=st.text_area("Your reasoning",placeholder="What was your thesis? Why did you think the price was wrong?")
-        factors={}
-        st.markdown("### Analysis context")
-        st.caption("Optional — leave this blank if you do not have the extra data yet.")
-        raw=st.text_area(f"Key factors ({FACTOR_HINTS[sport]})",placeholder="Paste any relevant stats, race data, lineup notes, weather, sectionals, etc.")
-        source_note=st.text_input("Data source / note",value="Manual entry")
-        submit=st.form_submit_button("Save Bet",use_container_width=True)
-        if submit:
-            cv=clv(odds,close)
-            execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (datetime.now().isoformat(),str(event_date),sport,league,event,book,bt,market,selection,line,odds,close,stake,"Pending",0,reasoning,"",cv,"","",json.dumps({"raw_factors":raw}),source_note))
-            st.success("Bet saved to the SQLite database.")
-            st.rerun()
+        asport=c1.selectbox("Sport",SPORTS,key="asport")
+        aselection=c2.text_input("Selection",placeholder="Player / team / runner")
+        amarket=c3.text_input("Market + line",placeholder="Over 2.5 threes")
+        aodds=c1.number_input("Available decimal odds",min_value=1.01,value=1.90,step=0.01)
+        aprob=c2.number_input("Your estimated win probability % (optional)",min_value=0.0,max_value=100.0,value=0.0,step=0.5)
+        confidence=c3.selectbox("Evidence quality",["Low / incomplete","Medium","High / well sourced"])
+        evidence=st.text_area("Evidence / reasoning",placeholder="Paste the stats and information you actually have. Missing data is okay — the analyst should say NO BET when evidence is insufficient.")
+        submitted=st.form_submit_button("Analyse Bet",use_container_width=True)
+    if submitted:
+        implied=100/aodds
+        edge=(aprob-implied) if aprob>0 else None
+        # deterministic safety gate before AI
+        if not evidence.strip() or confidence=="Low / incomplete" or aprob<=0:
+            gate="NO BET"; reason="Insufficient reliable evidence or no probability estimate."
+        elif edge < 2:
+            gate="NO BET"; reason=f"Estimated edge is only {edge:.1f} percentage points."
+        elif edge < 5:
+            gate="LEAN"; reason=f"Estimated edge is {edge:.1f} percentage points, but not strong enough for a full BET signal."
+        else:
+            gate="BET"; reason=f"Estimated edge is {edge:.1f} percentage points, subject to the evidence being accurate."
+        st.markdown(f"### Decision: **{gate}**")
+        st.write(reason)
+        x1,x2,x3=st.columns(3)
+        x1.metric("Market implied probability",f"{implied:.1f}%")
+        x2.metric("Your probability",f"{aprob:.1f}%" if aprob else "Not supplied")
+        x3.metric("Estimated edge",f"{edge:.1f} pp" if edge is not None else "Unknown")
+        data_ctx=latest_context(asport, aselection or amarket, 8)
+        if data_ctx:
+            st.markdown("### Connected data context")
+            st.caption("Recent structured snapshots stored by EdgeLab. The AI may use these, but must still label missing player/market data as unknown.")
+            st.dataframe(pd.DataFrame(data_ctx)[["captured_at","event","subject","source"]],use_container_width=True,hide_index=True)
+        key=os.getenv("OPENAI_API_KEY","")
+        try:
+            if not key and "OPENAI_API_KEY" in st.secrets: key=st.secrets["OPENAI_API_KEY"]
+        except: pass
+        if key:
+            try:
+                from openai import OpenAI
+                prompt=f"""Act as a conservative betting process analyst. Do not invent facts, statistics, injuries, odds movement, or live data.\nSPORT: {asport}\nSELECTION: {aselection}\nMARKET: {amarket}\nODDS: {aodds}\nUSER PROBABILITY: {aprob if aprob else 'not supplied'}\nEVIDENCE QUALITY: {confidence}\nSUPPLIED EVIDENCE: {evidence}\nSAFETY GATE: {gate} — {reason}\n\nExplain the decision in five short sections: Verdict, Price/Edge, Evidence For, Risks/Missing Data, What would change the decision. Never upgrade a NO BET safety gate to BET. If evidence is inadequate, explicitly say NO BET."""
+                resp=OpenAI(api_key=key).responses.create(model="gpt-5-mini",input=prompt)
+                st.markdown("### AI assessment")
+                st.write(resp.output_text)
+            except Exception as ex: st.warning(f"The rule-based decision worked, but AI commentary failed: {ex}")
+        else:
+            st.caption("Add OPENAI_API_KEY in Streamlit Secrets for the written AI assessment. The BET/LEAN/NO BET safety gate works without it.")
 
 # POST GAME
-with tabs[3]:
+with tabs[4]:
     st.markdown("## AI bet review")
     st.caption("Grade the decision separately from the outcome. A losing bet can still be a good bet, and vice versa.")
     df=q("SELECT * FROM bets ORDER BY event_date DESC,id DESC")
@@ -368,12 +501,17 @@ with tabs[3]:
             cv=clv(r.odds,closing)
             execsql("UPDATE bets SET result=?,pnl=?,closing_odds=?,clv=?,post_game_reason=? WHERE id=?",(result,pnl,closing,cv,post,int(chosen)))
             key=os.getenv("OPENAI_API_KEY","")
+            try:
+                if not key and "OPENAI_API_KEY" in st.secrets: key=st.secrets["OPENAI_API_KEY"]
+            except: pass
+            post_ctx=latest_context(r.sport, f"{r.event} {r.selection}", 8)
             prompt=f"""You are an expert betting process analyst, not a tipster. Review this {r.sport} bet using ONLY supplied information and clearly label unknowns.
 BET: {r.sport} | {r.bet_type} | {r.market} | {r.selection} | line {r.line} | odds {r.odds} | closing {closing} | stake {r.stake}
 ORIGINAL REASONING: {r.reasoning}
 SPORT FACTORS: {r.factors_json}
 RESULT: {result} | P&L {pnl}
 POST-EVENT NOTES: {post}
+CONNECTED POST-EVENT DATA: {json.dumps(post_ctx, default=str) if post_ctx else 'none available'}
 CLV: {cv}
 
 Return:
@@ -407,7 +545,7 @@ Do not invent stats or claim to have accessed live data."""
             st.write(r.ai_review)
 
 # DATABASE
-with tabs[4]:
+with tabs[5]:
     st.markdown("## Bet database")
     st.caption("Your complete betting history and recorded analysis.")
     df=q("SELECT * FROM bets ORDER BY event_date DESC,id DESC")
@@ -421,10 +559,39 @@ with tabs[4]:
         st.dataframe(od,use_container_width=True,hide_index=True)
 
 # DATA SOURCES
-with tabs[5]:
-    st.markdown("## Data sources & connectors")
-    st.write("The app is designed around a source layer so odds/stat feeds can be connected without changing the tracker database.")
-    st.markdown("### Sportsbet")
+with tabs[6]:
+    st.markdown("## Data Hub")
+    st.write("Pull free structured data into EdgeLab, store snapshots in the database, and make that context available to the pre-bet and post-game AI reviews.")
+    c1,c2=st.columns(2)
+    with c1:
+        st.markdown("### 🏀 NBA — free scoreboard/results")
+        nba_day=st.date_input("NBA date",value=date.today(),key="nba_data_day")
+        if st.button("Fetch NBA data",use_container_width=True):
+            try:
+                games=fetch_nba_scoreboard(nba_day)
+                for g in games: save_event_snapshot("NBA",g.get("name") or "NBA game","scoreboard",g,"ESPN public scoreboard")
+                st.success(f"Saved {len(games)} NBA game snapshots.")
+                if games: st.dataframe(pd.DataFrame(games),use_container_width=True,hide_index=True)
+            except Exception as ex: st.error(f"NBA fetch failed: {ex}")
+        st.caption("Free starting layer: schedule, scores and game status. Player prop logs/advanced stats are the next connector.")
+    with c2:
+        st.markdown("### 🏉 AFL — free fixtures/results")
+        afl_year=st.number_input("AFL season",min_value=2000,max_value=2100,value=date.today().year,step=1)
+        if st.button("Fetch AFL data",use_container_width=True):
+            try:
+                games=fetch_afl_games(afl_year)
+                for g in games:
+                    event=f"{g.get('hteam','')} v {g.get('ateam','')}"
+                    save_event_snapshot("AFL",event,"fixture/result",g,"Squiggle API")
+                st.success(f"Saved {len(games)} AFL game snapshots.")
+                if games: st.dataframe(pd.DataFrame(games),use_container_width=True,hide_index=True)
+            except Exception as ex: st.error(f"AFL fetch failed: {ex}")
+        st.caption("Squiggle gives us a free AFL fixture/results foundation. Detailed player props/CBA/TOG need a separate data source.")
+    stored=q("SELECT captured_at,sport,event,subject,source FROM event_data ORDER BY captured_at DESC LIMIT 50")
+    if not stored.empty:
+        st.markdown("### Latest stored data")
+        st.dataframe(stored,use_container_width=True,hide_index=True)
+    st.markdown("### Sportsbet / odds")
     st.info("The app records Sportsbet as the default bookmaker, but a live Sportsbet feed/API must be supplied or connected. This build does not pretend to have direct Sportsbet access when no authenticated feed is available.")
     st.markdown("### API configuration")
     st.code("""# Optional environment variables
@@ -449,7 +616,7 @@ SPORTSBET_API_KEY=...   # only if required by that feed""")
 
 st.sidebar.divider()
 st.sidebar.markdown("### 📈 EdgeLab")
-st.sidebar.caption("Betting Intelligence v3.1")
+st.sidebar.caption("Betting Intelligence v4.1 · Free Data Hub")
 st.sidebar.markdown("<span class='pill'>TRACK</span><span class='pill'>REVIEW</span>", unsafe_allow_html=True)
 st.sidebar.divider()
 st.sidebar.caption("Educational analytics only. Betting involves financial risk.")
