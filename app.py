@@ -1,5 +1,5 @@
 
-  
+
 import streamlit as st
 import pandas as pd
 import sqlite3, os, json, math, requests
@@ -10,32 +10,27 @@ st.set_page_config(page_title="EdgeLab | Betting Intelligence", page_icon="📈"
 
 st.markdown(r"""
 <style>
-:root { --panel:#111827; --panel2:#0b1220; --line:#263244; --muted:#94a3b8; --green:#22c55e; }
-[data-testid="stAppViewContainer"] { background: radial-gradient(circle at 15% 0%, #172033 0, #0b0f17 36%, #070a10 100%); color:#f8fafc; }
-[data-testid="stHeader"] { background: rgba(7,10,16,.72); }
-[data-testid="stSidebar"] { background:#090d14; border-right:1px solid #1e293b; }
-.block-container { max-width:1380px; padding-top:2rem; padding-bottom:4rem; }
-h1,h2,h3 { letter-spacing:-.025em; }
-h1 { font-size:2.25rem !important; }
-[data-testid="stMetric"] { background:linear-gradient(145deg,#121a29,#0c121d); border:1px solid #243044; padding:18px 20px; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.18); }
-[data-testid="stMetricLabel"] { color:#94a3b8; }
-[data-testid="stMetricValue"] { font-weight:800; }
-.stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button { border-radius:12px; min-height:46px; font-weight:700; border:1px solid #334155; }
-[data-testid="stFormSubmitButton"] > button { background:linear-gradient(90deg,#16a34a,#22c55e); color:#04120a; border:0; }
-[data-testid="stForm"] { background:rgba(15,23,42,.72); border:1px solid #243044; border-radius:18px; padding:1.25rem; }
-[data-baseweb="input"] > div, [data-baseweb="select"] > div, textarea { border-radius:10px !important; }
-[data-testid="stDataFrame"] { border:1px solid #243044; border-radius:14px; overflow:hidden; }
-.stTabs [data-baseweb="tab-list"] { gap:8px; background:#0b111b; border:1px solid #1e293b; border-radius:14px; padding:6px; }
-.stTabs [data-baseweb="tab"] { border-radius:10px; padding:8px 18px; }
-.stTabs [aria-selected="true"] { background:#172033; }
-.hero { padding:22px 24px; border:1px solid #263244; border-radius:20px; background:linear-gradient(120deg,rgba(34,197,94,.12),rgba(15,23,42,.82) 48%,rgba(59,130,246,.08)); margin-bottom:18px; }
-.hero-kicker { color:#22c55e; font-size:.78rem; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
-.hero-title { font-size:2.15rem; font-weight:850; letter-spacing:-.04em; margin:.2rem 0; }
-.hero-copy { color:#a8b3c5; margin:0; }
-.section-card { background:rgba(15,23,42,.62); border:1px solid #243044; border-radius:16px; padding:16px 18px; margin:10px 0 18px; }
-.pill { display:inline-block; padding:5px 10px; border-radius:999px; background:rgba(34,197,94,.12); color:#86efac; border:1px solid rgba(34,197,94,.25); font-size:.78rem; font-weight:700; margin-right:6px; }
-.small-muted { color:#94a3b8; font-size:.9rem; }
-hr { border-color:#1e293b !important; }
+:root{--bg:#061018;--panel:#0b1724;--line:#173149;--text:#f5f8fb;--muted:#8da2b7;--teal:#18e3b1;--green:#35e985;--red:#ff5e6c;--amber:#ffcc4d;--blue:#4bb8ff;}
+html,body,[class*="css"]{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+[data-testid="stAppViewContainer"]{background:radial-gradient(circle at 24% -10%,rgba(13,87,111,.22),transparent 33%),radial-gradient(circle at 90% 0%,rgba(0,185,145,.10),transparent 28%),linear-gradient(180deg,#061018 0%,#050b12 100%);color:var(--text);}
+[data-testid="stHeader"]{background:rgba(6,16,24,.84);backdrop-filter:blur(14px);border-bottom:1px solid rgba(32,65,93,.38);}
+[data-testid="stSidebar"]{background:linear-gradient(180deg,#06111a 0%,#050c13 100%);border-right:1px solid #10273a;}
+.block-container{max-width:1600px;padding-top:1rem;padding-bottom:3rem;} h1,h2,h3{letter-spacing:-.035em;color:#f8fbff;} h1{font-size:2rem!important;} h2{font-size:1.45rem!important;} p,li{color:#c8d4df;}
+[data-testid="stMetric"]{background:linear-gradient(145deg,rgba(14,29,44,.96),rgba(8,19,30,.96));border:1px solid #17344d;border-radius:14px;padding:14px 16px;box-shadow:0 10px 32px rgba(0,0,0,.18);}
+[data-testid="stMetricLabel"]{color:#9db0c2;} [data-testid="stMetricValue"]{font-weight:850;letter-spacing:-.035em;} [data-testid="stMetricDelta"]{color:var(--teal)!important;}
+.stButton>button,.stDownloadButton>button,[data-testid="stFormSubmitButton"]>button{min-height:43px;border-radius:9px;border:1px solid #22435f;background:linear-gradient(180deg,#102235,#0b1928);color:#eef7fb;font-weight:750;box-shadow:none;}
+[data-testid="stFormSubmitButton"]>button{background:linear-gradient(90deg,#08d9a4,#33efa9);color:#022c23;border:0;font-weight:900;}
+[data-testid="stForm"]{background:linear-gradient(145deg,rgba(11,23,36,.98),rgba(8,18,29,.96));border:1px solid #17344d;border-radius:14px;padding:1rem;}
+[data-baseweb="input"]>div,[data-baseweb="select"]>div,[data-testid="stTextArea"] textarea,[data-testid="stNumberInput"] input{background:#0a1623!important;border-color:#1b3952!important;border-radius:8px!important;}
+[data-testid="stDataFrame"]{border:1px solid #17344d;border-radius:12px;overflow:hidden;background:#08131f;}
+.top-shell{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:10px 14px;margin:0 0 12px;border:1px solid #163249;border-radius:13px;background:linear-gradient(180deg,rgba(10,24,36,.96),rgba(7,18,28,.94));}
+.brand{display:flex;align-items:center;gap:10px;min-width:220px}.brand-mark{width:29px;height:29px;border-radius:8px;display:grid;place-items:center;background:linear-gradient(135deg,#21f0b7,#0ea97f);color:#003b2e;font-weight:950}.brand-name{font-size:1.22rem;font-weight:900}.brand-sub{font-size:.62rem;color:#7890a6;letter-spacing:.16em;text-transform:uppercase}
+.search-shell{flex:1;max-width:560px;padding:9px 13px;border-radius:9px;border:1px solid #18364f;color:#8fa6ba;background:#081521}.status-strip{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.status-chip{padding:7px 10px;border:1px solid #17354d;border-radius:9px;background:#081521;min-width:110px}.status-chip b{display:block;color:#21e7b2;font-size:.94rem}.status-chip span{font-size:.65rem;color:#8199ad;text-transform:uppercase;letter-spacing:.08em}
+.page-kicker{color:#20e2ae;font-size:.7rem;font-weight:850;letter-spacing:.15em;text-transform:uppercase;margin-bottom:3px}.page-title{font-size:1.62rem;font-weight:900;letter-spacing:-.04em;color:#f7fbff}.page-copy{color:#8fa5ba;margin-top:3px;margin-bottom:12px}
+.panel-title{font-size:.95rem;font-weight:850;color:#f3f8fb;margin-bottom:7px}.panel-sub{font-size:.76rem;color:#8399ae}.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:8px 0 14px}.kpi-card{background:linear-gradient(145deg,#0c1b29,#08131f);border:1px solid #17364f;border-radius:12px;padding:13px 14px;min-height:93px}.kpi-label{font-size:.72rem;color:#90a6ba;margin-bottom:8px}.kpi-value{font-size:1.55rem;font-weight:900;color:#f4fbff}.kpi-delta{font-size:.72rem;color:#20e2ae;margin-top:6px}
+.alert-card,.signal{border:1px solid #183a53;border-radius:11px;padding:10px 11px;margin:7px 0;background:#081621}.alert-row{display:flex;gap:10px;align-items:flex-start}.alert-dot{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:0 0 8px}.alert-title{font-weight:800;font-size:.82rem;color:#f4f7fa}.alert-copy,.signal-meta{font-size:.72rem;color:#89a0b4;margin-top:2px;line-height:1.35}.signal-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.badge{display:inline-block;padding:3px 8px;border-radius:6px;font-size:.68rem;font-weight:900}.badge-bet{background:#20e2ae;color:#023b2e}.badge-lean{background:#ffcf4d;color:#423000}.badge-nobet{background:#263748;color:#dbe5ed}.green{color:#22e6b0}.muted{color:#8da2b7}
+.sidebar-logo{padding:8px 5px 10px}.sidebar-logo .x{font-weight:950;font-size:1.25rem;color:#f7fbff}.sidebar-logo .y{font-size:.65rem;color:#6f8aa1;letter-spacing:.14em}.ai-off{padding:8px 10px;border-radius:9px;border:1px solid #493e18;background:#1e1b0d;color:#ffd66a;font-size:.76rem}.ai-on{padding:8px 10px;border-radius:9px;border:1px solid #164836;background:#0b211a;color:#63efbf;font-size:.76rem}
+@media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.status-strip,.search-shell{display:none}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -52,7 +47,7 @@ BET_TYPES = {
     "Soccer":["Goals","Shots","Shots on Target","Assists","Cards","Corners","Moneyline","Draw No Bet","Total","Other"],
     "Tennis":["Match Winner","Games","Sets","Aces","Double Faults","Total Games","Handicap","Other"],
     "Horses":["Win","Place","Top 3","Top 4","Each Way","Exacta","Quinella","Trifecta","First 4","Other"],
-    "Greyhounds":["Win","Place","Top 2","Top 3","Exacta","Quinella","Trifecta","Other"]
+    "Greyhounds":["Win","Place","Top 2","Top 3","Top 4","Exacta","Quinella","Trifecta","Other"]
 }
 FACTOR_HINTS = {
     "NBA":"minutes, usage, matchup, pace, injuries, role, recent hit rate, rest, line movement",
@@ -101,6 +96,10 @@ def conn():
     multi_cols={row[1] for row in c.execute("PRAGMA table_info(multi_legs)").fetchall()}
     if "bet_type" not in multi_cols:
         c.execute("ALTER TABLE multi_legs ADD COLUMN bet_type TEXT")
+    c.execute("""CREATE TABLE IF NOT EXISTS analysis_log(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, sport TEXT, selection TEXT, market TEXT,
+      odds REAL, user_probability REAL, implied_probability REAL, edge REAL, gate TEXT,
+      evidence_quality TEXT, evidence TEXT, reason TEXT)""")
     c.execute("INSERT OR IGNORE INTO bankroll_settings(id,starting_bankroll,unit_percent,staking_mode,kelly_fraction) VALUES(1,1000,1.0,'Flat units',0.25)")
     c.commit()
     return c
@@ -167,18 +166,85 @@ def fetch_afl_games(year=None):
 
 conn().close()
 
-st.markdown("""
-<div class="hero">
-  <div class="hero-kicker">EDGE • PROCESS • PERFORMANCE</div>
-  <div class="hero-title">EdgeLab Betting Intelligence</div>
-  <p class="hero-copy">Track every wager, measure your closing-line value, and review the quality of your betting process.</p>
-</div>
-""", unsafe_allow_html=True)
+def _summary():
+    bets=q("SELECT * FROM bets")
+    settings=q("SELECT * FROM bankroll_settings WHERE id=1").iloc[0]
+    tx=q("SELECT * FROM bankroll_transactions ORDER BY txn_date,id")
+    settled=bets[bets.result.isin(["Won","Lost","Push"])].copy() if not bets.empty else pd.DataFrame()
+    start=float(settings.starting_bankroll)
+    dep=float(tx.loc[tx.txn_type=="Deposit","amount"].sum()) if not tx.empty else 0
+    wd=float(tx.loc[tx.txn_type=="Withdrawal","amount"].sum()) if not tx.empty else 0
+    pnl=float(settled.pnl.sum()) if not settled.empty else 0
+    bank=start+dep-wd+pnl
+    stake=float(settled.stake.sum()) if not settled.empty else 0
+    roi=pnl/stake*100 if stake else 0
+    clv_avg=float(settled.clv.mean()) if not settled.empty and settled.clv.notna().any() else 0
+    wl=settled[settled.result.isin(["Won","Lost"])] if not settled.empty else pd.DataFrame()
+    win=(wl.result.eq("Won").mean()*100) if not wl.empty else 0
+    pending=bets[bets.result.eq("Pending")] if not bets.empty else pd.DataFrame()
+    open_stake=float(pending.stake.sum()) if not pending.empty else 0
+    return dict(bets=bets,settled=settled,settings=settings,tx=tx,bank=bank,pnl=pnl,roi=roi,clv=clv_avg,win=win,pending=pending,open_stake=open_stake)
 
-tabs=st.tabs(["📊 Dashboard","💰 Bankroll","＋ Log Bet","🧠 Pre-Bet Analyst","✨ AI Review","🗂 Database","🔌 Data Sources"])
+summary=_summary()
+st.sidebar.markdown("""<div class='sidebar-logo'><div class='x'>◆ EdgeLab</div><div class='y'>INSIGHTS • EDGES • RESULTS</div></div>""",unsafe_allow_html=True)
+nav_items=["Dashboard","Analyse Bet","Log Bet","Multis","Bankroll","Performance","AI Review","Data Hub","Database","Settings"]
+page=st.sidebar.radio("Navigation",nav_items,label_visibility="collapsed",key="main_nav")
+ai_commentary_enabled=st.sidebar.toggle("Enable AI commentary",value=False,help="Off = no OpenAI API calls or credits used.")
+st.sidebar.markdown("<div class='ai-on'>● AI commentary enabled</div>" if ai_commentary_enabled else "<div class='ai-off'>AI commentary off · no API credits used</div>",unsafe_allow_html=True)
+st.sidebar.markdown("---"); st.sidebar.caption("EdgeLab v5 · Mockup-style interface"); st.sidebar.caption("Educational analytics only. Betting involves financial risk.")
+st.markdown(f"""<div class='top-shell'><div class='brand'><div class='brand-mark'>E</div><div><div class='brand-name'>EdgeLab</div><div class='brand-sub'>Insights • Edges • Results</div></div></div><div class='search-shell'>⌕ Search teams, players, races, or analyse a bet…</div><div class='status-strip'><div class='status-chip'><span>Bankroll</span><b>{money(summary['bank'])}</b></div><div class='status-chip'><span>Total P&L</span><b>{money(summary['pnl'])}</b></div><div class='status-chip'><span>AI Status</span><b>{'Online' if ai_commentary_enabled else 'Off'}</b></div><div class='status-chip'><span>Open Bets</span><b>{len(summary['pending'])}</b></div></div></div>""",unsafe_allow_html=True)
 
 # DASHBOARD
-with tabs[0]:
+if page=="Dashboard":
+    st.markdown("<div class='page-kicker'>Overview & insights</div><div class='page-title'>Dashboard</div><div class='page-copy'>Your bankroll, process quality, open exposure and latest EdgeLab signals in one view.</div>",unsafe_allow_html=True)
+    s=summary; open_count=len(s["pending"])
+    st.markdown(f"""<div class='kpi-grid'><div class='kpi-card'><div class='kpi-label'>Bankroll</div><div class='kpi-value'>{money(s['bank'])}</div><div class='kpi-delta'>{money(s['pnl'])} betting P&L</div></div><div class='kpi-card'><div class='kpi-label'>ROI</div><div class='kpi-value'>{pct(s['roi'])}</div><div class='kpi-delta'>{len(s['settled'])} settled bets</div></div><div class='kpi-card'><div class='kpi-label'>CLV</div><div class='kpi-value'>{pct(s['clv'])}</div><div class='kpi-delta'>Implied-probability CLV</div></div><div class='kpi-card'><div class='kpi-label'>Win Rate</div><div class='kpi-value'>{pct(s['win'])}</div><div class='kpi-delta'>Won / lost bets only</div></div><div class='kpi-card'><div class='kpi-label'>Open Bets</div><div class='kpi-value'>{open_count}</div><div class='kpi-delta'>{money(s['open_stake'])} currently staked</div></div></div>""",unsafe_allow_html=True)
+    main,right=st.columns([3.15,1.05],gap="large")
+    with main:
+        c1,c2=st.columns([1.45,1],gap="large")
+        with c1:
+            st.markdown("<div class='panel-title'>Bankroll Growth</div><div class='panel-sub'>Settled P&L plus cash movements</div>",unsafe_allow_html=True)
+            events=[]
+            if not s["tx"].empty:
+                for _,r in s["tx"].iterrows(): events.append({"date":pd.to_datetime(r.txn_date,errors="coerce"),"change":float(r.amount) if r.txn_type=="Deposit" else -float(r.amount)})
+            if not s["settled"].empty:
+                for _,r in s["settled"].iterrows(): events.append({"date":pd.to_datetime(r.event_date,errors="coerce"),"change":float(r.pnl or 0)})
+            ev=pd.DataFrame(events); start=float(s["settings"].starting_bankroll)
+            if not ev.empty:
+                ev=ev.dropna(subset=["date"]).sort_values("date"); ev["Bankroll"]=start+ev["change"].cumsum(); st.area_chart(ev.set_index("date")[["Bankroll"]],use_container_width=True,height=290)
+            else: st.info("Settle a bet or add a bankroll transaction to start the growth chart.")
+        with c2:
+            st.markdown("<div class='panel-title'>Performance by Sport</div><div class='panel-sub'>ROI from settled bets</div>",unsafe_allow_html=True)
+            if not s["settled"].empty:
+                perf=s["settled"].groupby("sport").agg(Bets=("id","count"),Stake=("stake","sum"),PnL=("pnl","sum")); perf["ROI"]=perf.apply(lambda r:(r.PnL/r.Stake*100) if r.Stake else 0,axis=1); st.bar_chart(perf[["ROI"]],use_container_width=True,height=290)
+            else: st.info("No settled bets yet.")
+        st.markdown("<div class='panel-title'>Recent Bets</div>",unsafe_allow_html=True)
+        if not s["bets"].empty:
+            recent=s["bets"].sort_values(["event_date","id"],ascending=False).head(10).copy(); recent["P&L"]=recent["pnl"].map(money); recent["CLV"]=recent["clv"].map(pct)
+            st.dataframe(recent[["event_date","sport","event","bet_type","selection","odds","stake","result","P&L","CLV"]],use_container_width=True,hide_index=True,height=300)
+        else: st.info("Log your first bet to populate this table.")
+    with right:
+        st.markdown("<div class='panel-title'>🔔 AI Alerts</div><div class='panel-sub'>Rule-based alerts from stored data and bankroll</div>",unsafe_allow_html=True)
+        alerts=[]
+        if s["bank"]>0 and s["open_stake"]/s["bank"]>0.10: alerts.append(("#ffcc4d","Bankroll warning",f"Open stake is {s['open_stake']/s['bank']*100:.1f}% of bankroll."))
+        if s["clv"]<-1 and len(s["settled"])>=3: alerts.append(("#ff6371","Price warning",f"Average CLV is {s['clv']:.2f}% — entries have been worse than the close on average."))
+        elif s["clv"]>1 and len(s["settled"])>=3: alerts.append(("#20e2ae","Positive CLV trend",f"Average CLV is {s['clv']:.2f}% across settled bets."))
+        dl=q("SELECT captured_at,sport,event,source FROM event_data ORDER BY captured_at DESC LIMIT 1")
+        if not dl.empty:
+            rr=dl.iloc[0]; alerts.append(("#4bb8ff","Data updated",f"{rr.sport}: {rr.event} · {rr.source}"))
+        if open_count: alerts.append(("#20e2ae","Open positions",f"{open_count} pending bet{'s' if open_count!=1 else ''} with {money(s['open_stake'])} at risk."))
+        if not alerts: alerts=[("#4bb8ff","No active alerts","Log bets and fetch data to generate alerts.")]
+        for col,title,copy in alerts[:5]: st.markdown(f"<div class='alert-card'><div class='alert-row'><div class='alert-dot' style='background:{col}'></div><div><div class='alert-title'>{title}</div><div class='alert-copy'>{copy}</div></div></div></div>",unsafe_allow_html=True)
+        st.markdown("<div class='panel-title' style='margin-top:14px'>🧠 Analysis Signals</div><div class='panel-sub'>Latest BET / LEAN / NO BET gates</div>",unsafe_allow_html=True)
+        signals=q("SELECT * FROM analysis_log ORDER BY id DESC LIMIT 5")
+        if signals.empty: st.markdown("<div class='signal'><div class='signal-head'><span class='badge badge-nobet'>WAITING</span><span class='muted'>No analyses yet</span></div><div class='signal-meta'>Run Analyse Bet to populate this panel.</div></div>",unsafe_allow_html=True)
+        else:
+            for _,r in signals.iterrows():
+                cls="badge-bet" if r.gate=="BET" else "badge-lean" if r.gate=="LEAN" else "badge-nobet"; edge=f"{float(r.edge):+.1f} pp" if pd.notna(r.edge) else "edge unknown"
+                st.markdown(f"<div class='signal'><div class='signal-head'><span class='badge {cls}'>{r.gate}</span><span class='green'>{edge}</span></div><div class='alert-title' style='margin-top:7px'>{r.sport} · {r.selection or r.market}</div><div class='signal-meta'>{r.market} @ {float(r.odds):.2f}</div></div>",unsafe_allow_html=True)
+
+# PERFORMANCE
+if page=="Performance":
     df=q("SELECT * FROM bets")
     settings=q("SELECT * FROM bankroll_settings WHERE id=1").iloc[0]
     tx=q("SELECT * FROM bankroll_transactions ORDER BY txn_date,id")
@@ -245,8 +311,8 @@ with tabs[0]:
             st.info("No settled bets for this filter yet.")
 
 # BANKROLL MANAGER
-with tabs[1]:
-    st.markdown("## 💰 Bankroll Manager")
+if page=="Bankroll":
+    st.markdown("<div class='page-kicker'>Money management</div><div class='page-title'>Bankroll</div>",unsafe_allow_html=True)
     st.caption("Manage your bankroll, staking rules, cash movements and risk. Settled bet P&L is included automatically.")
     settings=q("SELECT * FROM bankroll_settings WHERE id=1").iloc[0]
     tx=q("SELECT * FROM bankroll_transactions ORDER BY txn_date,id")
@@ -362,10 +428,10 @@ with tabs[1]:
         st.dataframe(tx[["txn_date","txn_type","amount","note"]].sort_values("txn_date",ascending=False),use_container_width=True,hide_index=True)
 
 # LOG BET
-with tabs[2]:
-    st.markdown("## Log a bet")
+if page in ("Log Bet","Multis"):
+    st.markdown("<div class='page-kicker'>Track your wagers</div><div class='page-title'>Log Bet / Multi</div>",unsafe_allow_html=True)
     st.caption("Log a single or a multi. Multi legs are stored individually so you can later see which markets are helping or hurting your parlays.")
-    wager_type=st.radio("Wager type",["Single","Multi / Parlay"],horizontal=True)
+    wager_type=st.radio("Wager type",["Single","Multi / Parlay"],horizontal=True,index=1 if page=="Multis" else 0,key="wager_type")
     if wager_type=="Single":
         c1,c2,c3=st.columns(3)
         event_date=c1.date_input("Event date",date.today(),key="sdate")
@@ -440,8 +506,8 @@ with tabs[2]:
             st.rerun()
 
 # PRE-BET ANALYST
-with tabs[3]:
-    st.markdown("## 🧠 Pre-Bet Analyst")
+if page=="Analyse Bet":
+    st.markdown("<div class='page-kicker'>Decision engine</div><div class='page-title'>Analyse Bet</div>",unsafe_allow_html=True)
     st.caption("A decision gate, not a pick generator. It can return BET, LEAN or NO BET and must not invent missing evidence.")
     with st.form("prebet"):
         c1,c2,c3=st.columns(3)
@@ -465,7 +531,8 @@ with tabs[3]:
             gate="LEAN"; reason=f"Estimated edge is {edge:.1f} percentage points, but not strong enough for a full BET signal."
         else:
             gate="BET"; reason=f"Estimated edge is {edge:.1f} percentage points, subject to the evidence being accurate."
-        st.markdown(f"### Decision: **{gate}**")
+        execsql("""INSERT INTO analysis_log(created_at,sport,selection,market,odds,user_probability,implied_probability,edge,gate,evidence_quality,evidence,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",(datetime.now().isoformat(),asport,aselection,amarket,float(aodds),float(aprob),float(implied),float(edge) if edge is not None else None,gate,confidence,evidence,reason))
+        st.markdown(f"<div class='page-kicker'>Recommendation</div><div class='page-title'>{gate}</div><div class='page-copy'>{reason}</div>",unsafe_allow_html=True)
         st.write(reason)
         x1,x2,x3=st.columns(3)
         x1.metric("Market implied probability",f"{implied:.1f}%")
@@ -480,20 +547,29 @@ with tabs[3]:
         try:
             if not key and "OPENAI_API_KEY" in st.secrets: key=st.secrets["OPENAI_API_KEY"]
         except: pass
-        if key:
+        if not ai_commentary_enabled:
+            st.info("AI commentary is switched off. No OpenAI API call was made and no API credits were used. The rule-based decision and connected-data checks above are still active.")
+        elif key:
             try:
                 from openai import OpenAI
                 prompt=f"""Act as a conservative betting process analyst. Do not invent facts, statistics, injuries, odds movement, or live data.\nSPORT: {asport}\nSELECTION: {aselection}\nMARKET: {amarket}\nODDS: {aodds}\nUSER PROBABILITY: {aprob if aprob else 'not supplied'}\nEVIDENCE QUALITY: {confidence}\nSUPPLIED EVIDENCE: {evidence}\nSAFETY GATE: {gate} — {reason}\n\nExplain the decision in five short sections: Verdict, Price/Edge, Evidence For, Risks/Missing Data, What would change the decision. Never upgrade a NO BET safety gate to BET. If evidence is inadequate, explicitly say NO BET."""
                 resp=OpenAI(api_key=key).responses.create(model="gpt-5-mini",input=prompt)
                 st.markdown("### AI assessment")
                 st.write(resp.output_text)
-            except Exception as ex: st.warning(f"The rule-based decision worked, but AI commentary failed: {ex}")
+            except Exception as ex:
+                msg=str(ex).lower()
+                if "insufficient_quota" in msg or "credit_balance_exhausted" in msg or "no credits" in msg:
+                    st.info("AI commentary is unavailable because the API account has no credits. Rule-based analysis still worked. You can leave AI commentary switched off while testing.")
+                elif "invalid_api_key" in msg or "incorrect api key" in msg:
+                    st.info("AI commentary is unavailable because the configured API key was rejected. Rule-based analysis still worked.")
+                else:
+                    st.info("AI commentary is temporarily unavailable. Rule-based analysis still worked.")
         else:
-            st.caption("Add OPENAI_API_KEY in Streamlit Secrets for the written AI assessment. The BET/LEAN/NO BET safety gate works without it.")
+            st.caption("AI commentary is enabled, but no OPENAI_API_KEY is configured. The BET/LEAN/NO BET safety gate works without it.")
 
 # POST GAME
-with tabs[4]:
-    st.markdown("## AI bet review")
+if page=="AI Review":
+    st.markdown("<div class='page-kicker'>Post-event process review</div><div class='page-title'>AI Review</div>",unsafe_allow_html=True)
     st.caption("Grade the decision separately from the outcome. A losing bet can still be a good bet, and vice versa.")
     df=q("SELECT * FROM bets ORDER BY event_date DESC,id DESC")
     if df.empty: st.info("Log a bet first.")
@@ -507,7 +583,8 @@ with tabs[4]:
         pnl=c2.number_input("P&L",value=float(r.pnl or 0),step=1.0)
         closing=c3.number_input("Closing odds",min_value=1.01,value=float(r.closing_odds or r.odds),step=0.01)
         post=st.text_area("What actually happened?",value=r.post_game_reason or "",placeholder="Game/race result, role, minutes, race shape, interference, weather, injuries, etc.")
-        if st.button("Save result + generate AI review",use_container_width=True):
+        review_button_label = "Save result + generate AI review" if ai_commentary_enabled else "Save result (AI commentary off)"
+        if st.button(review_button_label,use_container_width=True):
             cv=clv(r.odds,closing)
             execsql("UPDATE bets SET result=?,pnl=?,closing_odds=?,clv=?,post_game_reason=? WHERE id=?",(result,pnl,closing,cv,post,int(chosen)))
             key=os.getenv("OPENAI_API_KEY","")
@@ -534,7 +611,9 @@ Return:
 7) One change
 8) 2-5 tags from: good_process, bad_process, good_price, bad_price, variance, matchup, role, injury, pace, game_script, weather, track, barrier_box, race_pace, sectionals, class, interference, market_move, unknown
 Do not invent stats or claim to have accessed live data."""
-            if key:
+            if not ai_commentary_enabled:
+                st.success("Result saved. AI commentary is off, so no OpenAI API call was made and no API credits were used.")
+            elif key:
                 try:
                     from openai import OpenAI
                     client=OpenAI(api_key=key)
@@ -547,16 +626,27 @@ Do not invent stats or claim to have accessed live data."""
                     execsql("INSERT INTO reviews(bet_id,created_at,review,grade,tags) VALUES(?,?,?,?,?)",(int(chosen),datetime.now().isoformat(),review,grade,""))
                     st.success("AI review saved.")
                     st.write(review)
-                except Exception as ex: st.error(f"AI error: {ex}")
+                except Exception as ex:
+                    msg=str(ex).lower()
+                    if "insufficient_quota" in msg or "credit_balance_exhausted" in msg or "no credits" in msg:
+                        st.success("Result saved.")
+                        st.info("AI review was skipped because the API account has no credits. Leave AI commentary switched off while testing.")
+                    elif "invalid_api_key" in msg or "incorrect api key" in msg:
+                        st.success("Result saved.")
+                        st.info("AI review was skipped because the configured API key was rejected.")
+                    else:
+                        st.success("Result saved.")
+                        st.info("AI review is temporarily unavailable, but your result was saved normally.")
             else:
-                st.warning("Set OPENAI_API_KEY to enable automatic AI reviews.")
+                st.success("Result saved.")
+                st.info("AI commentary is enabled, but no OPENAI_API_KEY is configured.")
         if r.ai_review:
             st.markdown("### Previous AI Review")
             st.write(r.ai_review)
 
 # DATABASE
-with tabs[5]:
-    st.markdown("## Bet database")
+if page=="Database":
+    st.markdown("<div class='page-kicker'>History & audit trail</div><div class='page-title'>Database</div>",unsafe_allow_html=True)
     st.caption("Your complete betting history and recorded analysis.")
     df=q("SELECT * FROM bets ORDER BY event_date DESC,id DESC")
     if not df.empty:
@@ -569,8 +659,8 @@ with tabs[5]:
         st.dataframe(od,use_container_width=True,hide_index=True)
 
 # DATA SOURCES
-with tabs[6]:
-    st.markdown("## Data Hub")
+if page=="Data Hub":
+    st.markdown("<div class='page-kicker'>Odds, stats & models</div><div class='page-title'>Data Hub</div>",unsafe_allow_html=True)
     st.write("Pull free structured data into EdgeLab, store snapshots in the database, and make that context available to the pre-bet and post-game AI reviews.")
     c1,c2=st.columns(2)
     with c1:
@@ -624,10 +714,21 @@ SPORTSBET_API_KEY=...   # only if required by that feed""")
                 st.rerun()
             else: st.error("CSV needs at least: sport,event,market,selection,odds")
 
-st.sidebar.divider()
-st.sidebar.markdown("### 📈 EdgeLab")
-st.sidebar.caption("Betting Intelligence v4.1 · Free Data Hub")
-st.sidebar.markdown("<span class='pill'>TRACK</span><span class='pill'>REVIEW</span>", unsafe_allow_html=True)
-st.sidebar.divider()
-st.sidebar.caption("Educational analytics only. Betting involves financial risk.")
+
+if page=="Settings":
+    st.markdown("<div class='page-kicker'>Preferences & system status</div><div class='page-title'>Settings</div><div class='page-copy'>Control AI usage and check what data layers are active.</div>",unsafe_allow_html=True)
+    c1,c2=st.columns(2,gap="large")
+    with c1:
+        st.markdown("### AI commentary")
+        st.write("Use the sidebar toggle to enable or disable OpenAI commentary.")
+        st.success("AI commentary is enabled. API calls may use credits when analysis/review is requested.") if ai_commentary_enabled else st.info("AI commentary is off. EdgeLab will not make OpenAI API calls.")
+        st.markdown("### Decision engine")
+        st.caption("BET / LEAN / NO BET currently uses a transparent rule-based gate based on your probability estimate, market implied probability and evidence quality.")
+    with c2:
+        st.markdown("### Data status")
+        dc=q("SELECT sport,source,MAX(captured_at) AS latest,COUNT(*) AS rows FROM event_data GROUP BY sport,source ORDER BY latest DESC")
+        st.dataframe(dc,use_container_width=True,hide_index=True) if not dc.empty else st.info("No structured sports data stored yet.")
+        st.markdown("### Database")
+        st.caption(f"Local database: {DB}")
+        st.warning("Streamlit Community Cloud local SQLite storage may reset on redeploy/restart. Move to a persistent cloud database before relying on this for permanent history.")
          
