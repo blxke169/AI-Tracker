@@ -64,6 +64,16 @@ html,body,[class*="css"]{font-family:Inter,ui-sans-serif,system-ui,-apple-system
 .alert-card{box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}
 .alert-card:hover,.signal:hover{border-color:#24516f;transform:translateY(-1px);}
 
+
+.sample-warning{padding:8px 10px;border:1px solid #5b4b18;background:#1d190d;border-radius:8px;color:#ffd76a;font-size:.72rem;margin-top:7px;}
+.quick-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:8px 0 14px;}
+.quick-card{padding:12px 14px;border:1px solid #193a52;border-radius:11px;background:linear-gradient(145deg,#0d1c2a,#08131f);}
+.quick-card b{display:block;color:#f4f9fc;font-size:.86rem;margin-bottom:3px}.quick-card span{font-size:.72rem;color:#89a1b5}
+.score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 10px;}
+.score-card{padding:12px;border:1px solid #193950;border-radius:11px;background:#081621;}
+.score-label{font-size:.68rem;color:#8299ad;margin-bottom:5px}.score-value{font-size:1.18rem;font-weight:900;color:#f6fbff}.score-note{font-size:.68rem;color:#20dfad;margin-top:4px;}
+@media(max-width:900px){.quick-actions,.score-grid{grid-template-columns:1fr 1fr}}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -220,16 +230,96 @@ def _summary():
 
 summary=_summary()
 st.sidebar.markdown("""<div class='sidebar-logo'><div class='x'>◆ EdgeLab</div><div class='y'>INSIGHTS • EDGES • RESULTS</div></div>""",unsafe_allow_html=True)
-nav_items=["Dashboard","Analyse Bet","Log Bet","Multis","Bankroll","Performance","AI Review","Data Hub","Database","Settings"]
+nav_items=["Dashboard","Today","Analyse Bet","Log Bet","Multis","Bankroll","Performance","AI Review","Data Hub","Bet History","Settings"]
 page=st.sidebar.radio("Navigation",nav_items,label_visibility="collapsed",key="main_nav")
 ai_commentary_enabled=st.sidebar.toggle("Enable AI commentary",value=False,help="Off = no OpenAI API calls or credits used.")
 st.sidebar.markdown("<div class='ai-on'>● AI commentary enabled</div>" if ai_commentary_enabled else "<div class='ai-off'>AI commentary off · no API credits used</div>",unsafe_allow_html=True)
 st.sidebar.markdown("---"); st.sidebar.caption("EdgeLab v5 · Mockup-style interface"); st.sidebar.caption("Educational analytics only. Betting involves financial risk.")
 st.markdown(f"""<div class='top-shell'><div class='brand'><div class='brand-mark'>E</div><div><div class='brand-name'>EdgeLab</div><div class='brand-sub'>Insights • Edges • Results</div></div></div><div class='search-shell'>⌕ Search teams, players, races, or analyse a bet…</div><div class='status-strip'><div class='status-chip'><span>Bankroll</span><b>{money(summary['bank'])}</b></div><div class='status-chip'><span>Total P&L</span><b>{money(summary['pnl'])}</b></div><div class='status-chip'><span>AI Status</span><b>{'Online' if ai_commentary_enabled else 'Off'}</b></div><div class='status-chip'><span>Open Bets</span><b>{len(summary['pending'])}</b></div></div></div>""",unsafe_allow_html=True)
 
+
+# TODAY
+if page=="Today":
+    st.markdown("<div class='page-kicker'>Daily workspace</div><div class='page-title'>Today</div><div class='page-copy'>Open bets, exposure, latest alerts and items that need attention today.</div>",unsafe_allow_html=True)
+    s=summary
+    today_str=str(date.today())
+
+    t1,t2,t3,t4=st.columns(4)
+    todays_bets=s["bets"][s["bets"]["event_date"].astype(str).eq(today_str)] if not s["bets"].empty else pd.DataFrame()
+    todays_settled=todays_bets[todays_bets.result.isin(["Won","Lost","Push"])] if not todays_bets.empty else pd.DataFrame()
+    todays_pnl=float(todays_settled.pnl.sum()) if not todays_settled.empty else 0.0
+    t1.metric("Today's bets",len(todays_bets))
+    t2.metric("Open bets",len(s["pending"]))
+    t3.metric("Open stake",money(s["open_stake"]))
+    t4.metric("Today's P&L",money(todays_pnl))
+
+    st.markdown("<div class='panel-title'>Quick Actions</div>",unsafe_allow_html=True)
+    qa1,qa2,qa3=st.columns(3)
+    with qa1:
+        if st.button("🔎 Analyse Bet",use_container_width=True,key="today_analyse"):
+            st.session_state["main_nav"]="Analyse Bet"; st.rerun()
+    with qa2:
+        if st.button("＋ Log Bet",use_container_width=True,key="today_log"):
+            st.session_state["main_nav"]="Log Bet"; st.rerun()
+    with qa3:
+        if st.button("🧩 Add Multi",use_container_width=True,key="today_multi"):
+            st.session_state["main_nav"]="Multis"; st.rerun()
+
+    left,right=st.columns([2.1,1],gap="large")
+    with left:
+        st.markdown("<div class='panel-title'>Open / Pending Bets</div>",unsafe_allow_html=True)
+        if s["pending"].empty:
+            st.info("No open bets right now.")
+        else:
+            cols=["event_date","sport","event","bet_type","selection","odds","stake","result"]
+            st.dataframe(s["pending"][cols].sort_values(["event_date","id"],ascending=False),use_container_width=True,hide_index=True,height=260)
+
+        st.markdown("<div class='panel-title'>Today's Bets</div>",unsafe_allow_html=True)
+        if todays_bets.empty:
+            st.info("No bets dated today yet.")
+        else:
+            show=todays_bets.copy()
+            show["P&L"]=show["pnl"].map(money)
+            st.dataframe(show[["sport","event","bet_type","selection","odds","stake","result","P&L"]],use_container_width=True,hide_index=True)
+
+    with right:
+        st.markdown("<div class='panel-title'>⚠ Attention</div>",unsafe_allow_html=True)
+        msgs=[]
+        if s["bank"]>0 and s["open_stake"]/s["bank"]>0.10:
+            msgs.append(("Bankroll exposure",f"{s['open_stake']/s['bank']*100:.1f}% of bankroll is currently open."))
+        if s["clv"] < -1 and len(s["settled"])>=3:
+            msgs.append(("Negative CLV trend",f"Average implied-probability CLV is {s['clv']:.2f}%."))
+        old_pending=s["pending"][pd.to_datetime(s["pending"]["event_date"],errors="coerce") < pd.Timestamp(date.today())] if not s["pending"].empty else pd.DataFrame()
+        if not old_pending.empty:
+            msgs.append(("Needs settlement",f"{len(old_pending)} past-dated pending bet(s) may need a result entered."))
+        latest=q("SELECT MAX(captured_at) AS latest FROM event_data")
+        if not latest.empty and pd.notna(latest.iloc[0]["latest"]):
+            try:
+                last=pd.to_datetime(latest.iloc[0]["latest"])
+                hrs=(pd.Timestamp.now()-last).total_seconds()/3600
+                if hrs>12:
+                    msgs.append(("Data may be stale",f"Latest structured sports data is about {hrs:.0f} hours old."))
+            except Exception:
+                pass
+        if not msgs:
+            msgs=[("All clear","No urgent rule-based alerts right now.")]
+        for title,copy in msgs:
+            st.markdown(f"<div class='alert-card'><div class='alert-title'>{title}</div><div class='alert-copy'>{copy}</div></div>",unsafe_allow_html=True)
+
 # DASHBOARD
 if page=="Dashboard":
     st.markdown("<div class='page-kicker'>Overview & insights</div><div class='page-title'>Dashboard</div><div class='page-copy'>Your bankroll, process quality, open exposure and latest EdgeLab signals in one view.</div>",unsafe_allow_html=True)
+
+    qa1,qa2,qa3=st.columns(3)
+    with qa1:
+        if st.button("🔎 Analyse Bet",use_container_width=True,key="dash_analyse"):
+            st.session_state["main_nav"]="Analyse Bet"; st.rerun()
+    with qa2:
+        if st.button("＋ Log Bet",use_container_width=True,key="dash_log"):
+            st.session_state["main_nav"]="Log Bet"; st.rerun()
+    with qa3:
+        if st.button("🧩 Add Multi",use_container_width=True,key="dash_multi"):
+            st.session_state["main_nav"]="Multis"; st.rerun()
     s=summary; open_count=len(s["pending"])
     st.markdown(f"""<div class='kpi-grid'><div class='kpi-card'><div class='kpi-label'>Bankroll</div><div class='kpi-value'>{money(s['bank'])}</div><div class='kpi-delta'>{money(s['pnl'])} betting P&L</div></div><div class='kpi-card'><div class='kpi-label'>ROI</div><div class='kpi-value'>{pct(s['roi'])}</div><div class='kpi-delta'>{len(s['settled'])} settled bets</div></div><div class='kpi-card'><div class='kpi-label'>CLV</div><div class='kpi-value'>{pct(s['clv'])}</div><div class='kpi-delta'>Implied-probability CLV</div></div><div class='kpi-card'><div class='kpi-label'>Win Rate</div><div class='kpi-value'>{pct(s['win'])}</div><div class='kpi-delta'>Won / lost bets only</div></div><div class='kpi-card'><div class='kpi-label'>Open Bets</div><div class='kpi-value'>{open_count}</div><div class='kpi-delta'>{money(s['open_stake'])} currently staked</div></div></div>""",unsafe_allow_html=True)
     main,right=st.columns([3.15,1.05],gap="large")
@@ -251,6 +341,29 @@ if page=="Dashboard":
             if not s["settled"].empty:
                 perf=s["settled"].groupby("sport").agg(Bets=("id","count"),Stake=("stake","sum"),PnL=("pnl","sum")); perf["ROI"]=perf.apply(lambda r:(r.PnL/r.Stake*100) if r.Stake else 0,axis=1); st.bar_chart(perf[["ROI"]],use_container_width=True,height=290,color="#18e3b1")
             else: st.info("No settled bets yet.")
+
+        st.markdown("<div class='panel-title'>Model / Process Scorecard</div><div class='panel-sub'>Process metrics from your settled history</div>",unsafe_allow_html=True)
+        settled=s["settled"].copy()
+        if settled.empty:
+            st.info("Settle more bets to build your process scorecard.")
+        else:
+            pos_clv=int((settled["clv"].fillna(0)>0).sum())
+            neg_clv=int((settled["clv"].fillna(0)<0).sum())
+            avg_stake_pct=(settled["stake"].mean()/s["bank"]*100) if s["bank"] else 0
+            by_type=settled.groupby("bet_type").agg(Stake=("stake","sum"),PnL=("pnl","sum"),Bets=("id","count"))
+            by_type["ROI"]=by_type.apply(lambda r:(r.PnL/r.Stake*100) if r.Stake else 0,axis=1)
+            best_type=by_type["ROI"].idxmax() if not by_type.empty else "—"
+            worst_type=by_type["ROI"].idxmin() if not by_type.empty else "—"
+            score_html=f"""
+            <div class="score-grid">
+              <div class="score-card"><div class="score-label">Avg CLV</div><div class="score-value">{pct(s['clv'])}</div><div class="score-note">{pos_clv} positive / {neg_clv} negative</div></div>
+              <div class="score-card"><div class="score-label">Avg Stake / Bankroll</div><div class="score-value">{avg_stake_pct:.1f}%</div><div class="score-note">Exposure discipline</div></div>
+              <div class="score-card"><div class="score-label">Best Bet Type</div><div class="score-value">{best_type}</div><div class="score-note">By ROI</div></div>
+              <div class="score-card"><div class="score-label">Worst Bet Type</div><div class="score-value">{worst_type}</div><div class="score-note">Review for leaks</div></div>
+            </div>"""
+            st.markdown(score_html,unsafe_allow_html=True)
+            st.dataframe(by_type.reset_index()[["bet_type","Bets","ROI","PnL"]],use_container_width=True,hide_index=True,height=220)
+
         st.markdown("<div class='panel-title'>Recent Bets</div>",unsafe_allow_html=True)
         if not s["bets"].empty:
             recent=s["bets"].sort_values(["event_date","id"],ascending=False).head(10).copy(); recent["P&L"]=recent["pnl"].map(money); recent["CLV"]=recent["clv"].map(pct)
@@ -264,13 +377,43 @@ if page=="Dashboard":
     with right:
         st.markdown("<div class='panel-title'>🔔 AI Alerts</div><div class='panel-sub'>Rule-based alerts from stored data and bankroll</div>",unsafe_allow_html=True)
         alerts=[]
-        if s["bank"]>0 and s["open_stake"]/s["bank"]>0.10: alerts.append(("#ffcc4d","Bankroll warning",f"Open stake is {s['open_stake']/s['bank']*100:.1f}% of bankroll."))
-        if s["clv"]<-1 and len(s["settled"])>=3: alerts.append(("#ff6371","Price warning",f"Average CLV is {s['clv']:.2f}% — entries have been worse than the close on average."))
-        elif s["clv"]>1 and len(s["settled"])>=3: alerts.append(("#20e2ae","Positive CLV trend",f"Average CLV is {s['clv']:.2f}% across settled bets."))
-        dl=q("SELECT captured_at,sport,event,source FROM event_data ORDER BY captured_at DESC LIMIT 1")
-        if not dl.empty:
-            rr=dl.iloc[0]; alerts.append(("#4bb8ff","Data updated",f"{rr.sport}: {rr.event} · {rr.source}"))
-        if open_count: alerts.append(("#20e2ae","Open positions",f"{open_count} pending bet{'s' if open_count!=1 else ''} with {money(s['open_stake'])} at risk."))
+        # Stronger rule-based alerts that work without paid AI.
+        if s["bank"]>0 and s["open_stake"]/s["bank"]>0.10:
+            alerts.append(("amber","Bankroll warning",f"Open stake is {s['open_stake']/s['bank']*100:.1f}% of bankroll. Consider concentration risk."))
+        if not s["pending"].empty:
+            exp=s["pending"].groupby("sport")["stake"].sum().sort_values(ascending=False)
+            if len(exp) and s["bank"]>0 and float(exp.iloc[0])/s["bank"]>0.08:
+                alerts.append(("amber","Sport concentration",f"{exp.index[0]} accounts for {float(exp.iloc[0])/s['bank']*100:.1f}% of bankroll in open stake."))
+        if s["clv"] < -1 and len(s["settled"])>=3:
+            alerts.append(("red","Price warning",f"Average CLV is {s['clv']:.2f}%. Your entries have been worse than the close on average."))
+        elif s["clv"] > 1 and len(s["settled"])>=3:
+            alerts.append(("green","Positive CLV trend",f"Average CLV is {s['clv']:.2f}% across settled bets."))
+        if not s["settled"].empty:
+            recent_results=s["settled"].sort_values(["event_date","id"],ascending=False).head(5)["result"].tolist()
+            loss_streak=0
+            for r in recent_results:
+                if r=="Lost": loss_streak+=1
+                else: break
+            if loss_streak>=3:
+                alerts.append(("red","Losing streak",f"{loss_streak} consecutive losses. Avoid stake escalation and review process quality."))
+            bt=s["settled"].groupby("bet_type").agg(Stake=("stake","sum"),PnL=("pnl","sum"),Bets=("id","count"))
+            bt["ROI"]=bt.apply(lambda r:(r.PnL/r.Stake*100) if r.Stake else 0,axis=1)
+            bad=bt[(bt["Bets"]>=5)&(bt["ROI"]<-10)]
+            if not bad.empty:
+                name=bad["ROI"].idxmin()
+                alerts.append(("red","Bet-type leak",f"{name} is running at {bad.loc[name,'ROI']:.1f}% ROI over {int(bad.loc[name,'Bets'])} bets."))
+        data_latest=q("SELECT captured_at,sport,event,source FROM event_data ORDER BY captured_at DESC LIMIT 1")
+        if not data_latest.empty:
+            rr=data_latest.iloc[0]
+            alerts.append(("blue","Data updated",f"{rr.sport}: {rr.event} · {rr.source}"))
+            try:
+                hrs=(pd.Timestamp.now()-pd.to_datetime(rr.captured_at)).total_seconds()/3600
+                if hrs>12:
+                    alerts.append(("amber","Data freshness warning",f"Latest structured sports data is about {hrs:.0f} hours old."))
+            except Exception:
+                pass
+        if open_count:
+            alerts.append(("green","Open positions",f"{open_count} pending bet{'s' if open_count!=1 else ''} with {money(s['open_stake'])} at risk."))
         if not alerts: alerts=[("#4bb8ff","No active alerts","Log bets and fetch data to generate alerts.")]
         for col,title,copy in alerts[:5]: st.markdown(f"<div class='alert-card'><div class='alert-row'><div class='alert-dot' style='background:{col}'></div><div><div class='alert-title'>{title}</div><div class='alert-copy'>{copy}</div></div></div></div>",unsafe_allow_html=True)
         st.markdown("<div class='panel-title' style='margin-top:14px'>🧠 AI Recommendations</div><div class='panel-sub'>Latest BET / LEAN / NO BET signals from your analysis engine</div>",unsafe_allow_html=True)
@@ -283,6 +426,8 @@ if page=="Dashboard":
 
 # PERFORMANCE
 if page=="Performance":
+    if len(summary["settled"]) < 20:
+        st.warning(f"Low sample: {len(summary['settled'])} settled bets. Treat ROI, win rate and sport splits as preliminary.")
     df=q("SELECT * FROM bets")
     settings=q("SELECT * FROM bankroll_settings WHERE id=1").iloc[0]
     tx=q("SELECT * FROM bankroll_transactions ORDER BY txn_date,id")
@@ -683,8 +828,8 @@ Do not invent stats or claim to have accessed live data."""
             st.write(r.ai_review)
 
 # DATABASE
-if page=="Database":
-    st.markdown("<div class='page-kicker'>History & audit trail</div><div class='page-title'>Database</div>",unsafe_allow_html=True)
+if page=="Bet History":
+    st.markdown("<div class='page-kicker'>History & audit trail</div><div class='page-title'>Bet History</div>",unsafe_allow_html=True)
     st.caption("Your complete betting history and recorded analysis.")
     df=q("SELECT * FROM bets ORDER BY event_date DESC,id DESC")
     if not df.empty:
@@ -697,6 +842,64 @@ if page=="Database":
         st.dataframe(od,use_container_width=True,hide_index=True)
 
 # DATA SOURCES
+    st.markdown("---")
+    st.markdown("### Remove past bets")
+    st.caption("Delete an individual bet from EdgeLab. For multis, linked leg records are removed too.")
+
+    delete_df = q("SELECT id,event_date,sport,event,bet_type,selection,odds,stake,result,pnl FROM bets ORDER BY event_date DESC,id DESC")
+    if delete_df.empty:
+        st.info("There are no bets to remove.")
+    else:
+        def _bet_label(row):
+            event = str(row["event"] or "").strip()
+            selection = str(row["selection"] or "").strip()
+            parts = [
+                f"#{int(row['id'])}",
+                str(row["event_date"]),
+                str(row["sport"]),
+                str(row["bet_type"]),
+                selection or event or "Unnamed bet",
+                f"@ {float(row['odds']):.2f}" if pd.notna(row["odds"]) else "",
+                f"{money(float(row['stake']))}" if pd.notna(row["stake"]) else "",
+                str(row["result"]),
+            ]
+            return " · ".join([x for x in parts if x])
+
+        delete_options = {
+            _bet_label(row): int(row["id"])
+            for _, row in delete_df.iterrows()
+        }
+        selected_label = st.selectbox(
+            "Choose a bet to remove",
+            list(delete_options.keys()),
+            key="delete_bet_select"
+        )
+        selected_id = delete_options[selected_label]
+        selected_row = delete_df.loc[delete_df["id"] == selected_id].iloc[0]
+
+        st.warning(
+            f"You are about to permanently remove bet #{selected_id}: "
+            f"{selected_row['sport']} · {selected_row['selection'] or selected_row['event']} · "
+            f"{selected_row['result']}."
+        )
+        confirm_delete = st.checkbox(
+            "I understand this will permanently delete this bet from the current database.",
+            key="confirm_delete_bet"
+        )
+
+        if st.button(
+            "🗑️ Delete selected bet",
+            type="primary",
+            disabled=not confirm_delete,
+            use_container_width=True,
+            key="delete_selected_bet"
+        ):
+            execsql("DELETE FROM multi_legs WHERE bet_id=?", (selected_id,))
+            execsql("DELETE FROM reviews WHERE bet_id=?", (selected_id,))
+            execsql("DELETE FROM bets WHERE id=?", (selected_id,))
+            st.success(f"Bet #{selected_id} was removed.")
+            st.rerun()
+
 if page=="Data Hub":
     st.markdown("<div class='page-kicker'>Odds, stats & models</div><div class='page-title'>Data Hub</div>",unsafe_allow_html=True)
     st.write("Pull free structured data into EdgeLab, store snapshots in the database, and make that context available to the pre-bet and post-game AI reviews.")
@@ -769,3 +972,4 @@ if page=="Settings":
         st.markdown("### Database")
         st.caption(f"Local database: {DB}")
         st.warning("Streamlit Community Cloud local SQLite storage may reset on redeploy/restart. Move to a persistent cloud database before relying on this for permanent history.")
+
