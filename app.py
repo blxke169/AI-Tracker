@@ -5,7 +5,38 @@ import sqlite3, os, json, math
 from datetime import datetime, date
 from pathlib import Path
 
-st.set_page_config(page_title="AI Betting Intelligence", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="EdgeLab | Betting Intelligence", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown(r"""
+<style>
+:root { --panel:#111827; --panel2:#0b1220; --line:#263244; --muted:#94a3b8; --green:#22c55e; }
+[data-testid="stAppViewContainer"] { background: radial-gradient(circle at 15% 0%, #172033 0, #0b0f17 36%, #070a10 100%); color:#f8fafc; }
+[data-testid="stHeader"] { background: rgba(7,10,16,.72); }
+[data-testid="stSidebar"] { background:#090d14; border-right:1px solid #1e293b; }
+.block-container { max-width:1380px; padding-top:2rem; padding-bottom:4rem; }
+h1,h2,h3 { letter-spacing:-.025em; }
+h1 { font-size:2.25rem !important; }
+[data-testid="stMetric"] { background:linear-gradient(145deg,#121a29,#0c121d); border:1px solid #243044; padding:18px 20px; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.18); }
+[data-testid="stMetricLabel"] { color:#94a3b8; }
+[data-testid="stMetricValue"] { font-weight:800; }
+.stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button { border-radius:12px; min-height:46px; font-weight:700; border:1px solid #334155; }
+[data-testid="stFormSubmitButton"] > button { background:linear-gradient(90deg,#16a34a,#22c55e); color:#04120a; border:0; }
+[data-testid="stForm"] { background:rgba(15,23,42,.72); border:1px solid #243044; border-radius:18px; padding:1.25rem; }
+[data-baseweb="input"] > div, [data-baseweb="select"] > div, textarea { border-radius:10px !important; }
+[data-testid="stDataFrame"] { border:1px solid #243044; border-radius:14px; overflow:hidden; }
+.stTabs [data-baseweb="tab-list"] { gap:8px; background:#0b111b; border:1px solid #1e293b; border-radius:14px; padding:6px; }
+.stTabs [data-baseweb="tab"] { border-radius:10px; padding:8px 18px; }
+.stTabs [aria-selected="true"] { background:#172033; }
+.hero { padding:22px 24px; border:1px solid #263244; border-radius:20px; background:linear-gradient(120deg,rgba(34,197,94,.12),rgba(15,23,42,.82) 48%,rgba(59,130,246,.08)); margin-bottom:18px; }
+.hero-kicker { color:#22c55e; font-size:.78rem; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
+.hero-title { font-size:2.15rem; font-weight:850; letter-spacing:-.04em; margin:.2rem 0; }
+.hero-copy { color:#a8b3c5; margin:0; }
+.section-card { background:rgba(15,23,42,.62); border:1px solid #243044; border-radius:16px; padding:16px 18px; margin:10px 0 18px; }
+.pill { display:inline-block; padding:5px 10px; border-radius:999px; background:rgba(34,197,94,.12); color:#86efac; border:1px solid rgba(34,197,94,.25); font-size:.78rem; font-weight:700; margin-right:6px; }
+.small-muted { color:#94a3b8; font-size:.9rem; }
+hr { border-color:#1e293b !important; }
+</style>
+""", unsafe_allow_html=True)
 
 DB = Path("betting.db")
 SPORTS = ["NBA","NFL","NHL","MLB","NCAAB","NCAAF","AFL","Soccer","Tennis","Horses","Greyhounds"]
@@ -82,16 +113,21 @@ def pct(x):
 
 conn().close()
 
-st.title("🤖 AI Betting Intelligence")
-st.caption("Database + tracker + CLV + sport-specific analysis + AI post-game/race review")
+st.markdown("""
+<div class="hero">
+  <div class="hero-kicker">EDGE • PROCESS • PERFORMANCE</div>
+  <div class="hero-title">EdgeLab Betting Intelligence</div>
+  <p class="hero-copy">Track every wager, measure your closing-line value, and review the quality of your betting process.</p>
+</div>
+""", unsafe_allow_html=True)
 
-tabs=st.tabs(["Dashboard","Log Bet","Post-Game AI","Database","Data Sources"])
+tabs=st.tabs(["📊 Dashboard","＋ Log Bet","✨ AI Review","🗂 Database","🔌 Data Sources"])
 
 # DASHBOARD
 with tabs[0]:
     df=q("SELECT * FROM bets")
     if df.empty:
-        st.info("No bets yet. Use Log Bet to start.")
+        st.info("Your dashboard is empty. Log your first bet to start building your performance history.")
     else:
         sport_filter=st.selectbox("Sport",["All"]+SPORTS,key="dashsport")
         d=df if sport_filter=="All" else df[df.sport==sport_filter]
@@ -103,15 +139,15 @@ with tabs[0]:
         a,b,c,e=st.columns(4)
         a.metric("ROI",pct(roi)); b.metric("P&L",money(pnl)); c.metric("Avg CLV",pct(avgclv)); e.metric("Bets",len(d))
         if not settled.empty:
-            st.subheader("Performance by Bet Type")
+            st.markdown("### Performance by bet type")
             g=settled.groupby("bet_type").agg(Bets=("id","count"),Stake=("stake","sum"),PnL=("pnl","sum"),CLV=("clv","mean")).reset_index()
             g["ROI"]=g.apply(lambda r:r.PnL/r.Stake*100 if r.Stake else 0,axis=1)
             g["P&L"]=g.PnL.map(money); g["ROI"]=g.ROI.map(pct); g["CLV"]=g.CLV.map(pct)
             st.dataframe(g[["bet_type","Bets","Stake","P&L","ROI","CLV"]],use_container_width=True,hide_index=True)
-            st.subheader("AI Process Tags / Grades")
+            st.markdown("### Process grades")
             grades=settled[settled.process_grade.astype(str)!=""].groupby("process_grade").size().reset_index(name="Bets")
             if not grades.empty: st.dataframe(grades,use_container_width=True,hide_index=True)
-            st.subheader("Recent Bets")
+            st.markdown("### Recent bets")
             cols=["id","event_date","sport","event","bet_type","selection","line","odds","closing_odds","result","pnl","clv","process_grade"]
             show=settled.sort_values("event_date",ascending=False)[cols].copy()
             show["pnl"]=show.pnl.map(money); show["clv"]=show.clv.map(pct)
@@ -119,7 +155,8 @@ with tabs[0]:
 
 # LOG BET
 with tabs[1]:
-    st.subheader("Log a Bet")
+    st.markdown("## Log a bet")
+    st.caption("Capture the price and thesis at the time you place the wager. Optional context can be added now or later.")
     with st.form("log"):
         c1,c2,c3=st.columns(3)
         event_date=c1.date_input("Event date",date.today())
@@ -136,8 +173,8 @@ with tabs[1]:
         stake=c1.number_input("Stake",min_value=0.0,value=20.0,step=5.0)
         reasoning=st.text_area("Your reasoning",placeholder="What was your thesis? Why did you think the price was wrong?")
         factors={}
-        st.markdown("**Sport-specific information for the AI**")
-        st.caption("You can leave these blank if the data source will populate them later.")
+        st.markdown("### Analysis context")
+        st.caption("Optional — leave this blank if you do not have the extra data yet.")
         raw=st.text_area(f"Key factors ({FACTOR_HINTS[sport]})",placeholder="Paste any relevant stats, race data, lineup notes, weather, sectionals, etc.")
         source_note=st.text_input("Data source / note",value="Manual entry")
         submit=st.form_submit_button("Save Bet",use_container_width=True)
@@ -145,13 +182,14 @@ with tabs[1]:
             cv=clv(odds,close)
             execsql("""INSERT INTO bets(placed_at,event_date,sport,league,event,book,bet_type,market,selection,line,odds,closing_odds,stake,result,pnl,reasoning,post_game_reason,clv,ai_review,process_grade,factors_json,source_note)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (datetime.now().isoformat(),str(event_date),sport,league,event,book,bt,market,selection,line,odds,close,stake,"Pending",0,reasoning,"",cv,"","","",json.dumps({"raw_factors":raw}),source_note))
+            (datetime.now().isoformat(),str(event_date),sport,league,event,book,bt,market,selection,line,odds,close,stake,"Pending",0,reasoning,"",cv,"","",json.dumps({"raw_factors":raw}),source_note))
             st.success("Bet saved to the SQLite database.")
             st.rerun()
 
 # POST GAME
 with tabs[2]:
-    st.subheader("AI Post-Game / Post-Race Review")
+    st.markdown("## AI bet review")
+    st.caption("Grade the decision separately from the outcome. A losing bet can still be a good bet, and vice versa.")
     df=q("SELECT * FROM bets ORDER BY event_date DESC,id DESC")
     if df.empty: st.info("Log a bet first.")
     else:
@@ -208,8 +246,8 @@ Do not invent stats or claim to have accessed live data."""
 
 # DATABASE
 with tabs[3]:
-    st.subheader("Database")
-    st.caption("SQLite database: betting.db")
+    st.markdown("## Bet database")
+    st.caption("Your complete betting history and recorded analysis.")
     df=q("SELECT * FROM bets ORDER BY event_date DESC,id DESC")
     if not df.empty:
         st.dataframe(df,use_container_width=True,hide_index=True)
@@ -222,7 +260,7 @@ with tabs[3]:
 
 # DATA SOURCES
 with tabs[4]:
-    st.subheader("Data Sources & Connectors")
+    st.markdown("## Data sources & connectors")
     st.write("The app is designed around a source layer so odds/stat feeds can be connected without changing the tracker database.")
     st.markdown("### Sportsbet")
     st.info("The app records Sportsbet as the default bookmaker, but a live Sportsbet feed/API must be supplied or connected. This build does not pretend to have direct Sportsbet access when no authenticated feed is available.")
@@ -248,5 +286,10 @@ SPORTSBET_API_KEY=...   # only if required by that feed""")
             else: st.error("CSV needs at least: sport,event,market,selection,odds")
 
 st.sidebar.divider()
-st.sidebar.caption("AI Betting Intelligence v3")
+st.sidebar.markdown("### 📈 EdgeLab")
+st.sidebar.caption("Betting Intelligence v3.1")
+st.sidebar.markdown("<span class='pill'>TRACK</span><span class='pill'>REVIEW</span>", unsafe_allow_html=True)
+st.sidebar.divider()
 st.sidebar.caption("Educational analytics only. Betting involves financial risk.")
+
+   
