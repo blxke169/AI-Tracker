@@ -354,10 +354,37 @@ def _extract_receiving_line(player_obj):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
+def _nflverse_player_assets():
+    """Discover current nflverse player-stat assets from the official GitHub release."""
+    api="https://api.github.com/repos/nflverse/nflverse-data/releases/tags/player_stats"
+    r=requests.get(api,timeout=20,headers={"User-Agent":"EdgeLab/1.0","Accept":"application/vnd.github+json"})
+    r.raise_for_status()
+    return {
+        a.get("name"): a.get("browser_download_url")
+        for a in r.json().get("assets",[])
+        if a.get("name") and a.get("browser_download_url")
+    }
+
+@st.cache_data(ttl=1800, show_spinner=False)
 def fetch_nflverse_weekly_player_stats(season):
-    """Load nflverse weekly player stats for one season."""
-    url=f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{int(season)}.csv"
-    return pd.read_csv(url)
+    """Load nflverse weekly player stats for one season using discovered release assets."""
+    season=int(season)
+    assets=_nflverse_player_assets()
+    preferred=[
+        f"stats_player_week_{season}.csv",
+        f"stats_player_week_{season}.csv.gz",
+        f"stats_player_week_{season}.parquet",
+    ]
+    for name in preferred:
+        url=assets.get(name)
+        if not url:
+            continue
+        if name.endswith(".parquet"):
+            return pd.read_parquet(url)
+        return pd.read_csv(url)
+    # Final direct-URL fallback for older/alternate release layouts.
+    direct=f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{season}.csv"
+    return pd.read_csv(direct)
 
 def build_nflverse_player_packet(player_name, max_games=10):
     """Build an NFL receiving packet from nflverse weekly player stats."""
@@ -365,15 +392,24 @@ def build_nflverse_player_packet(player_name, max_games=10):
     if not player_name:
         return None
     frames=[]
-    for season in [date.today().year, date.today().year-1]:
+    source_errors=[]
+    for season in [date.today().year, date.today().year-1, date.today().year-2, date.today().year-3]:
         try:
             df=fetch_nflverse_weekly_player_stats(season)
             if df is not None and not df.empty:
+                df=df.copy()
+                df["season_source"]=season
                 frames.append(df)
-        except Exception:
-            continue
+        except Exception as ex:
+            source_errors.append(f"{season}: {type(ex).__name__}")
     if not frames:
-        return None
+        return {
+            "player":player_name,
+            "games":[],
+            "summary":{},
+            "source":"nflverse weekly player stats",
+            "diagnostic":"No season files loaded. " + "; ".join(source_errors[:4])
+        }
 
     df=pd.concat(frames,ignore_index=True)
 
@@ -385,15 +421,24 @@ def build_nflverse_player_packet(player_name, max_games=10):
     if not name_col:
         return None
 
-    mask=df[name_col].astype(str).str.lower().str.contains(player_name.lower(), regex=False, na=False)
+    def _norm_name(s):
+        return re.sub(r"[^a-z0-9]","",str(s).lower())
+    target=_norm_name(player_name)
+    norm_series=df[name_col].astype(str).map(_norm_name)
+    mask=norm_series.eq(target)
+    if not mask.any():
+        # surname + first-name containment fallback
+        tokens=[_norm_name(t) for t in player_name.split() if len(_norm_name(t))>=3]
+        mask=norm_series.map(lambda x: all(t in x for t in tokens)) if tokens else mask
     p=df.loc[mask].copy()
     if p.empty:
-        tokens=[t for t in player_name.lower().split() if len(t)>2]
-        if tokens:
-            mask=df[name_col].astype(str).str.lower().apply(lambda x: all(t in x for t in tokens))
-            p=df.loc[mask].copy()
-    if p.empty:
-        return None
+        return {
+            "player":player_name,
+            "games":[],
+            "summary":{},
+            "source":"nflverse weekly player stats",
+            "diagnostic":f"Player name not found in loaded nflverse files using column {name_col}."
+        }
 
     sort_cols=[c for c in ["season","week"] if c in p.columns]
     if sort_cols:
@@ -459,8 +504,11 @@ def build_player_history_packet(sport, player_name, lookback_days=45, max_games=
             packet=build_nflverse_player_packet(player_name,max_games=max_games)
             if packet and packet.get("games"):
                 return packet
-        except Exception:
-            pass
+            nflverse_diag=packet.get("diagnostic") if packet else None
+        except Exception as ex:
+            nflverse_diag=f"nflverse error: {type(ex).__name__}: {ex}"
+    else:
+        nflverse_diag=None
     games=[]
     for offset in range(int(lookback_days)):
         if len(games)>=max_games:
@@ -517,7 +565,8 @@ def build_player_history_packet(sport, player_name, lookback_days=45, max_games=
         "games":games,
         "summary":summary,
         "source":"ESPN public event summaries",
-        "lookback_days":lookback_days
+        "lookback_days":lookback_days,
+        "diagnostic": nflverse_diag if sport=="NFL" and not games else None
     }
 
 def derive_market_hit_rate(packet, market_text):
@@ -1264,7 +1313,9 @@ if page=="Analyse Bet":
             else:
                 m3.metric("Market hit rate","—")
         elif asport in ("NFL","NBA","NHL","MLB","NCAAB","NCAAF","Soccer","Tennis") and aselection.strip():
-            st.caption("No exact recent player stat rows were found automatically. For NFL, EdgeLab tries nflverse weekly player stats first, then ESPN summaries. It will not mark player claims as verified unless the source returns the exact player/stat fields.")
+            st.caption("No exact recent player stat rows were found automatically. EdgeLab will not mark player claims as verified unless the source returns the exact player/stat fields.")
+            if player_packet and player_packet.get("diagnostic"):
+                st.warning(f"Player-data diagnostic: {player_packet.get('diagnostic')}")
         st.caption(f"Verification source: {source_status_for_sport(asport)}")
         if data_ctx:
             st.markdown("### Connected data context")
@@ -1689,3 +1740,4 @@ if page=="Settings":
         st.markdown("### Database")
         st.caption(f"Local database: {DB}")
         st.warning("Streamlit Community Cloud local SQLite storage may reset on redeploy/restart. Move to a persistent cloud database before relying on this for permanent history.")
+
